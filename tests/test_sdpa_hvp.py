@@ -6,6 +6,10 @@ def test_sdpa_hvp_matches_finite_difference():
     This test operates at the operator-contract level and ensures that
     second-order derivatives exist and are numerically correct.
     """
+    # NOTE:
+    # This test currently fails because SDPAFunction.backward does not
+    # construct a differentiable backward graph.
+    # This is expected and motivates Route B (explicit JVP/HVP support).
     from theria.autograd.sdpa_function import SDPAFunction
 
     torch.manual_seed(0)
