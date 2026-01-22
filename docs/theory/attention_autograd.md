@@ -1,3 +1,7 @@
+## Phase 2 Summary / Phase 3 Transition
+
+Phase 2 established explicit Hessian–vector product (HVP) correctness for reference attention implementations, providing a reliable baseline for higher-order differentiation. In contrast, the `SDPAFunction` is now a *known* failure case for Hessian–vector products due to its opaque backward graph and insufficient saved intermediates. This document henceforth serves as the boundary specification for Phase 3, delineating the precise failure modes and guiding subsequent experimental investigation.
+
 ## Hessian–Vector Products for SDPA
 
 ### Motivation
@@ -92,10 +96,12 @@ attention can be recovered by explicitly implementing the softmax JVP, without
 requiring a fully differentiable backward pass.
 
 ### Attention HVP Decomposition
-- HVP_Q
-- HVP_K
-- HVP_V
 
+Explicit Hessian–vector products with respect to $Q$, $K$, and $V$—
+denoted HVP\_Q, HVP\_K, and HVP\_V—are now implemented in `reference_hvp.py`
+and have been numerically validated against finite difference baselines.
+These explicit decompositions concretely realize the theoretical framework
+outlined above and serve as a reference for evaluating alternative attention implementations.
 
 ## Why SDPAFunction Fails Hessian–Vector Products
 
@@ -140,3 +146,21 @@ This observation motivates implementing attention with explicit Jacobian–vecto
 products (e.g. via softmax JVPs) or forward-mode rules, enabling meta-learning
 and implicit differentiation without requiring a fully differentiable backward
 kernel.
+
+## Phase 3 Goal: Locating the Attention Autograd Boundary
+
+The experimental plan for Phase 3 involves systematically swapping the current
+attention implementations along the spectrum:
+
+- from the numerically validated reference attention with explicit HVPs,
+- to the `SDPAFunction` mathematical formulation,
+- and finally to the fused `SDPA` kernel.
+
+This staged substitution aims to isolate the precise point at which Hessian–vector
+products fail. The central hypothesis is that the failure arises from missing
+softmax JVP computations or equivalent saved intermediate state within the
+backward pass of fused kernels.
+
+The objective at this stage is diagnostic: to precisely characterize the autograd
+boundary within the attention computation graph. Fixing the failure or redesigning
+backward kernels will follow once the root cause is fully understood.
