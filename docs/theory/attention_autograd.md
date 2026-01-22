@@ -96,7 +96,47 @@ requiring a fully differentiable backward pass.
 - HVP_K
 - HVP_V
 
-### Implications for Kernel Design
-What must be saved / exposed.
-Why FlashAttention fails.
-Why Triton + JVP is viable.
+
+## Why SDPAFunction Fails Hessian–Vector Products
+
+Although scaled dot-product attention is mathematically smooth, the current
+`SDPAFunction` implementation does **not** support higher-order derivatives.
+This failure is structural rather than numerical.
+
+### Opaque backward graph
+
+`SDPAFunction.backward` returns tensors that are **not connected to a
+higher-order autograd graph**. Even when first-order gradients are computed with
+`create_graph=True`, the backward pass itself is treated as an atomic operation.
+As a result, the outputs of the backward pass do not carry `grad_fn` metadata
+needed for second-order differentiation.
+
+### Insufficient saved intermediates
+
+The backward pass saves only those intermediates required to compute
+first-order gradients. However, Hessian–vector products for attention require
+additional quantities—most notably information equivalent to the softmax
+Jacobian–vector product (JVP). These are not preserved by standard fused or
+custom backward implementations.
+
+### Consequence for autograd
+
+When attempting to compute a Hessian–vector product via double backward
+(e.g. differentiating ⟨∇L, v⟩), PyTorch raises an error indicating that the
+relevant tensors do not require gradients. Autograd cannot trace Jacobian–vector
+products *through* the backward pass because the backward graph is opaque.
+
+### Design contract
+
+This defines the exact failure boundary motivating Route B:
+
+- First-order gradients through SDPA are supported.
+- Second-order derivatives fail because the backward pass is not itself
+  differentiable.
+- Recovering higher-order information requires explicitly providing JVP or HVP
+  rules for attention, rather than relying on double backward.
+
+This observation motivates implementing attention with explicit Jacobian–vector
+products (e.g. via softmax JVPs) or forward-mode rules, enabling meta-learning
+and implicit differentiation without requiring a fully differentiable backward
+kernel.
