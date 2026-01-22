@@ -47,6 +47,7 @@ def inner_adapt(
     *,
     inner_lr: float = 0.1,
     inner_steps: int = 1,
+    fo: bool = False,
 ) -> Params:
     """
     Full MAML inner loop:
@@ -63,7 +64,7 @@ def inner_adapt(
         grads = torch.autograd.grad(
             loss_s,
             tuple(phi.values()),
-            create_graph=True, # REQUIRED for meta-gradient
+            create_graph=not fo, # REQUIRED for meta-gradient
             retain_graph=True,
             allow_unused=False,
         )
@@ -93,6 +94,7 @@ def meta_loss_on_tasks(
     *,
     inner_lr: float = 0.1,
     inner_steps: int = 1,
+    fo: bool = False,
 ) -> torch.Tensor:
     """
     Compute meta-loss across a batch/list of tasks:
@@ -103,7 +105,8 @@ def meta_loss_on_tasks(
 
     losses = []
     for task in tasks:
-        phi = inner_adapt(model, params, buffers, task, inner_lr=inner_lr, inner_steps=inner_steps)
+        phi = inner_adapt(model, params, buffers, task, inner_lr=inner_lr, inner_steps=inner_steps, fo=fo)
         losses.append(outer_loss(model, phi, buffers, task))
-
+    # NOTE: We intentionally do not detach phi between steps.
+    # This preserves higher-order gradients for full MAML.
     return torch.stack(losses).mean()

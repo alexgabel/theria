@@ -31,6 +31,7 @@ def sdpa_explicit(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Te
 class TinyAttentionConfig:
     d_model: int = 64
     num_classes: int = 5
+    # NOTE: seq_len intentionally omitted — model is sequence-length agnostic
 
 
 class TinyAttentionModel(nn.Module):

@@ -22,7 +22,7 @@ def test_maml_meta_grad_exists_k1_cpu():
 
     # Configuration with small model size and double precision.
     cfg = TinyAttentionConfig(d_model=16, num_classes=3)
-    model = TinyAttentionModel(cfg)
+    model = TinyAttentionModel(cfg).double()  # Ensure model and data are both torch.double for functional_call
 
     # Sample a small number of tasks with double precision on CPU.
     tasks = [
