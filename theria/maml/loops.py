@@ -1,4 +1,15 @@
 # theria/maml/loops.py
+"""
+Phase 2 MAML loops.
+
+Design constraints:
+- Full MAML (second-order)
+- No mutation of model parameters
+- Uses torch.func.functional_call
+- Attention implementation must support grad-of-grad
+
+This module is correctness-first and intentionally unoptimized.
+"""
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -52,11 +63,12 @@ def inner_adapt(
         grads = torch.autograd.grad(
             loss_s,
             tuple(phi.values()),
-            create_graph=True,
+            create_graph=True, # REQUIRED for meta-gradient
             retain_graph=True,
             allow_unused=False,
         )
-
+        # NOTE: create_graph=True is what enables second-order meta-gradients.
+        # Removing this turns full MAML into FO-MAML.
         phi = OrderedDict(
             (name, p - inner_lr * g)
             for (name, p), g in zip(phi.items(), grads)
