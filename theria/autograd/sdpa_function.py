@@ -5,8 +5,15 @@ from theria.attention.reference import sdpa_reference
 
 def sdpa(q, k, v):
     """
+    Scaled Dot-Product Attention.
+    
     Public SDPA entry point.
     All callers should use this, not SDPAFunction.apply directly.
+   
+    Contract:
+      - Inputs: (B, H, T, D)
+      - Output: (B, H, T, D)
+      - Fully differentiable
     """
     return SDPAFunction.apply(q, k, v)
 

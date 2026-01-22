@@ -4,6 +4,6 @@ channels:
   - conda-forge
 dependencies:
   - python=3.10
-  - pytorch>=2.0
+  - pytorch>=2.1
   - numpy
   - pytest
