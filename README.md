@@ -24,7 +24,9 @@ theria explores how to:
 - **Phase 1** — First-order autograd correctness (`gradcheck`) ✅  
 - **Phase 2** — HVP/JVP semantics and meta-learning support **(completed)**  
 - **Phase 3** — Attention Autograd Boundary Analysis *(future)*  
-- **Phase 4** — Custom JVP/HVP attention, Triton optional *(future)*  
+- **Phase 4** — Custom JVP/HVP attention, Triton optional *(future)*
+- **Phase 5** – Attention-Specific JVP Mathematics *(future)*
+- **Phase 6** – Performance-Aware Reintroduction *(future)*  
 
 All current tests run on CPU. GPU support is intentionally deferred.
 
@@ -69,6 +71,31 @@ Out of scope (for now):
 Where exactly does optimized SDPA break higher-order differentiation?  
 
 This phase focuses on diagnosing the autograd boundary failures of optimized attention implementations, without yet attempting fixes.  
+
+### Phase 3 — Attention Autograd Boundary Analysis (Planned)
+
+Objective  
+Identify the precise autograd boundary where optimized attention implementations (e.g. FlashAttention / fused SDPA) break higher-order differentiation.
+
+Key questions  
+- Which derivative is missing: JVP, VJP, or saved intermediate?  
+- Is the failure silent or explicit?  
+- Does backward succeed while grad-of-grad fails?  
+- Is the issue backend-specific or operator-intrinsic?  
+
+Method  
+- Compare explicit attention vs SDPA math vs fused SDPA  
+- Inspect autograd graphs and saved tensors  
+- Validate HVP existence via:  
+  - double backward (when possible)  
+  - finite differences  
+  - reproduce failures deterministically  
+
+Outcome  
+A precise operator-level failure contract:  
+“Given inputs Q, K, V, the optimized attention path does not expose X, therefore Y (HVP/JVP) cannot be computed.”  
+
+This contract defines the requirements for Phase 4.
 
 ---
 
