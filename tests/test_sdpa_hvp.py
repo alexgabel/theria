@@ -1,6 +1,6 @@
 import pytest
 
-
+@pytest.mark.xfail(reason="Phase 2 HVP not implemented yet")
 def test_sdpa_hvp_placeholder():
     """Phase 2: Validate that SDPA supports correct Hessian–vector products (HVP)
     at the operator contract level, independent of backend implementation."""
