@@ -20,10 +20,11 @@ theria explores how to:
 
 ## Project status
 
-- **Phase 0** — Operator contract and reference semantics (CPU) ✅
-- **Phase 1** — First-order autograd correctness (`gradcheck`) ✅
-- **Phase 2** — HVP/JVP semantics and meta-learning support *(in progress)*
-- **Phase 3** — Triton/CUDA kernels and performance work *(future)*
+- **Phase 0** — Operator contract and reference semantics (CPU) ✅  
+- **Phase 1** — First-order autograd correctness (`gradcheck`) ✅  
+- **Phase 2** — HVP/JVP semantics and meta-learning support **(completed)**  
+- **Phase 3** — Attention Autograd Boundary Analysis *(future)*  
+- **Phase 4** — Custom JVP/HVP attention, Triton optional *(future)*  
 
 All current tests run on CPU. GPU support is intentionally deferred.
 
@@ -31,34 +32,52 @@ A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
 
 ---
 
+## Phase 2 Results (Closed)
+
+- Full MAML with attention on CPU  
+- Explicit HVP validated by finite differences  
+- FO-MAML vs full MAML distinction locked by tests  
+- Documented SDPA higher-order autograd failure  
+
+---
+
 ## Current scope
 
-Implemented:
-- Public SDPA operator contract (`sdpa`)
-- Reference SDPA implementation
-- Custom `autograd.Function`
-- Forward equivalence tests vs reference
-- First-order gradient correctness tests
-- Clean, reproducible CPU-only environment and packaging
+Implemented:  
+- Public SDPA operator contract (`sdpa`)  
+- Reference SDPA implementation  
+- Custom `autograd.Function`  
+- Forward equivalence tests vs reference  
+- First-order gradient correctness tests  
+- Numerical and autograd-based HVP/JVP validation  
+- Meta-learning compatibility (MAML-style inner/outer loops)  
+- Clean, reproducible CPU-only environment and packaging  
 
-In progress:
-- Numerical and autograd-based HVP/JVP validation
-- Meta-learning compatibility (MAML-style inner/outer loops)
+Known limitations:  
+- SDPA math/fused paths are known to fail HVP  
 
-Out of scope (for now):
-- Triton kernels
-- CUDA-specific optimizations
-- Backward-backward (full gradgrad) kernels
-- Performance benchmarking
+Out of scope (for now):  
+- Triton kernels  
+- CUDA-specific optimizations  
+- Backward-backward (full gradgrad) kernels  
+- Performance benchmarking  
+
+---
+
+## Phase 3 Goal
+
+Where exactly does optimized SDPA break higher-order differentiation?  
+
+This phase focuses on diagnosing the autograd boundary failures of optimized attention implementations, without yet attempting fixes.  
 
 ---
 
 ## Design philosophy
 
-- **Contracts before kernels**
-- **Correctness before performance**
-- **Operator-level semantics over implementation details**
-- CPU-first development; GPU work only once semantics are fixed
+- **Contracts before kernels**  
+- **Correctness before performance**  
+- **Operator-level semantics over implementation details**  
+- CPU-first development; GPU work only once semantics are fixed  
 
 This repository is intended to be readable, reviewable, and useful to researchers working on meta-learning, implicit differentiation, and operator-based models.
 
@@ -79,4 +98,4 @@ A manual smoke test for SDPA forward/backward is available under `scripts/`.
 
 ## Disclaimer
 
-theria is a research codebase under active development. APIs may change until Phase 2 is complete and merged into `main`.
+theria is a research codebase under active development. APIs may change until Phase 3 is complete and merged into `main`.
