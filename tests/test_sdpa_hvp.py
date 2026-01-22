@@ -1,17 +1,44 @@
-import pytest
+import torch
 
-@pytest.mark.xfail(reason="Phase 2 HVP not implemented yet")
-def test_sdpa_hvp_placeholder():
-    """Phase 2: Validate that SDPA supports correct Hessian–vector products (HVP)
-    at the operator contract level, independent of backend implementation."""
-    # TODO: Numeric test plan:
-    # 1. build small, deterministic q/k/v tensors so sdpa output is reproducible.
-    # 2. run the forward pass and compute loss from a scalar reduction of sdpa(q, k, v).
-    # 3. call .backward() to collect gradients needed for the HVP.
-    # 4. use torch.autograd.functional.hvp (or manual double backward) to evaluate
-    #    the Hessian-vector product along a direction coming from another random tensor.
-    # 5. compare that result against a finite-difference approximation that perturbs
-    #    the input direction in small steps to confirm the HVP computation matches
-    #    the numerical derivative within tolerance.
-    # 6. Keep the test failing until a working implementation and thresholds are in place.
-    pytest.fail("TODO: implement SDPA HVP tests")
+def test_sdpa_hvp_matches_finite_difference():
+    """Validate Hessian–vector product (HVP) for SDPA via finite differences.
+
+    This test operates at the operator-contract level and ensures that
+    second-order derivatives exist and are numerically correct.
+    """
+    from theria.autograd.sdpa_function import SDPAFunction
+
+    torch.manual_seed(0)
+    dtype = torch.double
+
+    # Small, deterministic tensors
+    q = torch.randn(1, 1, 3, 4, dtype=dtype, requires_grad=True)
+    k = torch.randn(1, 1, 3, 4, dtype=dtype, requires_grad=True)
+    v = torch.randn(1, 1, 3, 4, dtype=dtype, requires_grad=True)
+
+    def loss_fn(q, k, v):
+        out = SDPAFunction.apply(q, k, v)
+        return out.sum()
+
+    # Direction vectors for HVP
+    vq = torch.randn_like(q)
+    vk = torch.randn_like(k)
+    vv = torch.randn_like(v)
+
+    # Compute gradients
+    loss = loss_fn(q, k, v)
+    grads = torch.autograd.grad(loss, (q, k, v), create_graph=True)
+
+    # Directional derivative of gradient (HVP)
+    dot = (grads[0] * vq).sum() + (grads[1] * vk).sum() + (grads[2] * vv).sum()
+    hvp = torch.autograd.grad(dot, (q, k, v), retain_graph=False)
+
+    # Finite-difference approximation
+    eps = 1e-4
+    loss_plus = loss_fn(q + eps * vq, k + eps * vk, v + eps * vv)
+    loss_minus = loss_fn(q - eps * vq, k - eps * vk, v - eps * vv)
+    fd = (loss_plus - loss_minus) / (2 * eps)
+
+    hvp_sum = hvp[0].sum() + hvp[1].sum() + hvp[2].sum()
+
+    assert torch.allclose(hvp_sum, fd, rtol=1e-3, atol=1e-4)
