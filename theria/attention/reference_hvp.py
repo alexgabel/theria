@@ -1,8 +1,16 @@
+"""
+NOTE:
+This is an explicit analytic HVP for SDPA under the loss:
+    L = sum(P @ V)
+
+It is intended for correctness validation and meta-learning research.
+It does NOT cover masking, dropout, or general losses.
+"""
 import math
 import torch
 
 
-def sdpa_reference_hvp(q, k, v, vq, vk, vv):
+def sdpa_hvp(q, k, v, vq, vk, vv):
     """
     Explicit Hessian–vector product for
         L = sum(sdpa_reference(q, k, v))
@@ -28,18 +36,18 @@ def sdpa_reference_hvp(q, k, v, vq, vk, vv):
     # Directional derivative of softmax probabilities
     probs_dir = softmax_jvp(scores_dir)
 
-    # Gradient seed w.r.t. probs for L = sum(P @ V) is V^T 1 = sum over last dim of V
-    grad_probs = v.sum(dim=-1, keepdim=True).expand_as(probs)
+    # Gradient seed w.r.t. probs for L = sum(P @ V) is sum over last dim of V
+    grad_probs = v.sum(dim=-1).unsqueeze(-2).expand_as(probs)
     # Directional derivative of gradient w.r.t. probs
-    grad_probs_dir = vv.sum(dim=-1, keepdim=True).expand_as(probs)
+    grad_probs_dir = vv.sum(dim=-1).unsqueeze(-2).expand_as(probs)
 
     # Compute inner terms for gradient w.r.t. scores
     inner = (grad_probs * probs).sum(dim=-1, keepdim=True)
     inner_dir = (grad_probs_dir * probs + grad_probs * probs_dir).sum(dim=-1, keepdim=True)
 
     # Gradient w.r.t. scores and its directional derivative
-    grad_scores = grad_probs - probs * inner
-    grad_scores_dir = grad_probs_dir - (probs_dir * inner + probs * inner_dir)
+    grad_scores = probs * (grad_probs - inner)
+    grad_scores_dir = probs_dir * (grad_probs - inner) + probs * (grad_probs_dir - inner_dir)
 
     # Assemble HVP w.r.t. q and k
     hvp_q = scale * (
@@ -51,6 +59,6 @@ def sdpa_reference_hvp(q, k, v, vq, vk, vv):
     )
 
     # HVP w.r.t. v is the directional derivative of grad w.r.t v: (δP)^T 1
-    hvp_v = probs_dir.sum(dim=-2, keepdim=True).expand_as(v)
+    hvp_v = probs_dir.sum(dim=-2).unsqueeze(-1).expand_as(v)
 
     return hvp_q, hvp_k, hvp_v
