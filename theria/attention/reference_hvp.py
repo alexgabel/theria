@@ -5,6 +5,11 @@ This is an explicit analytic HVP for SDPA under the loss:
 
 It is intended for correctness validation and meta-learning research.
 It does NOT cover masking, dropout, or general losses.
+
+# This is a correctness reference, not optimized code:
+# - written for clarity and traceability against the math
+# - avoids fused ops and in-place tricks
+# - meant to stay readable for higher-order differentiation audits
 """
 import math
 import torch

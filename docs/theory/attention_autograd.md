@@ -164,3 +164,15 @@ backward pass of fused kernels.
 The objective at this stage is diagnostic: to precisely characterize the autograd
 boundary within the attention computation graph. Fixing the failure or redesigning
 backward kernels will follow once the root cause is fully understood.
+
+```
+Q,K,V --(matmul/scale)--> scores --(softmax)--> P --(matmul)--> out --(loss)--> L
+                             ^                       ^
+                             |                       |
+                         saved?                  saved?
+                             |                       |
+                         backward                grad of grad ?
+```
+
+Boxes mark where saved tensors or grad_fn metadata must survive for higher-order
+derivatives. Phase 3 identifies which arrows go missing in fused/optimized paths.
