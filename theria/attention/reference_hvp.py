@@ -1,3 +1,5 @@
+# NOTE: This implementation is for correctness and higher-order autodiff only.
+# It is intentionally slow and unfused.
 """
 NOTE:
 This is an explicit analytic HVP for SDPA under the loss:

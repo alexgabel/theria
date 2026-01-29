@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 3 (Attention boundary analysis)
+Current phase: Phase 4 (Custom attention with explicit JVP/HVP contract)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -20,10 +20,15 @@ Key results (Phase 2):
 - Validated numerical correctness of higher-order derivatives on CPU reference implementation
 - Identified and characterized a clear failure boundary in SDPA attention derivatives, delineating the limits of current differentiation methods
 
-Phase 3 goals:
-- Replace reference attention implementation with SDPA-based mathematical formulation and fused kernels
-- Analyze and precisely locate the missing derivative edge in SDPA attention to enable robust higher-order differentiation
-- Develop strategies to extend differentiation capabilities beyond the identified boundary, improving model expressiveness and training stability
+Phase 3 (completed):
+- Replaced reference attention with SDPA math and fused kernels for diagnosis
+- Precisely located the missing derivative edge in SDPA attention (opaque backward graph / missing JVP)
+- Established the higher-order boundary contract that future kernels must satisfy
+
+Phase 4 goals:
+- Introduce a custom attention operator that explicitly exposes JVP/HVP information for (Q, K, V)
+- Ensure the new operator passes the `test_attention_boundary_*` suite (grad-of-grad included)
+- Prepare for later performance work without sacrificing the established higher-order contract
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

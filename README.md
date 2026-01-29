@@ -22,15 +22,17 @@ theria explores how to:
 
 - **Phase 0** — Operator contract and reference semantics (CPU) ✅  
 - **Phase 1** — First-order autograd correctness (`gradcheck`) ✅  
-- **Phase 2** — HVP/JVP semantics and meta-learning support **(completed)**  
-- **Phase 3** — Attention Autograd Boundary Analysis *(future)*  
-- **Phase 4** — Custom JVP/HVP attention, Triton optional *(future)*
+- **Phase 2** — HVP/JVP semantics and meta-learning support ✅  
+- **Phase 3** — Attention Autograd Boundary Analysis ✅  
+- **Phase 4** — Custom attention operator exposing explicit JVP/HVP (systems + math; performance later) *(in progress)*  
 - **Phase 5** – Attention-Specific JVP Mathematics *(future)*
 - **Phase 6** – Performance-Aware Reintroduction *(future)*  
 
 All current tests run on CPU. GPU support is intentionally deferred.
 
 A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
+
+Phase 4 introduces a custom attention operator that satisfies the higher-order differentiation contract established in Phase 3.
 
 ---
 
@@ -125,4 +127,4 @@ A manual smoke test for SDPA forward/backward is available under `scripts/`.
 
 ## Disclaimer
 
-theria is a research codebase under active development. APIs may change until Phase 3 is complete and merged into `main`.
+theria is a research codebase under active development. APIs may change until Phase 4 is complete and merged into `main`.

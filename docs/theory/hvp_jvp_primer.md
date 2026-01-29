@@ -6,33 +6,33 @@ Jacobian-vector products (JVPs) and Hessian-vector products (HVPs) are fundament
 
 ## 2. Definitions
 
-- **Jacobian**: For a vector-valued function \( f: \mathbb{R}^n \to \mathbb{R}^m \), the Jacobian \( J_f \) is the \( m \times n \) matrix of partial derivatives:
-  \[
+- **Jacobian**: For a vector-valued function $f: \mathbb{R}^n \to \mathbb{R}^m$, the Jacobian $J_f$ is the $m \times n$ matrix of partial derivatives:
+  $$
   (J_f)_{ij} = \frac{\partial f_i}{\partial x_j}.
-  \]
+  $$
 
-- **Jacobian-vector product (JVP)**: Given a vector \( v \in \mathbb{R}^n \), the JVP is
-  \[
+- **Jacobian-vector product (JVP)**: Given a vector $v \in \mathbb{R}^n$, the JVP is
+  $$
   J_f v = \left.\frac{d}{d\epsilon} f(x + \epsilon v) \right|_{\epsilon=0}.
-  \]
-  This represents the directional derivative of \( f \) at \( x \) in the direction \( v \).
+  $$
+  This represents the directional derivative of $f$ at $x$ in the direction $v$.
 
-- **Vector-Jacobian product (VJP)**: Given \( u \in \mathbb{R}^m \), the VJP is
-  \[
+- **Vector-Jacobian product (VJP)**: Given $u \in \mathbb{R}^m$, the VJP is
+  $$
   u^\top J_f = \left.\frac{d}{d\epsilon} u^\top f(x + \epsilon v) \right|_{\epsilon=0},
-  \]
+  $$
   commonly used in reverse-mode autodiff.
 
-- **Hessian**: For a scalar-valued function \( g: \mathbb{R}^n \to \mathbb{R} \), the Hessian \( H_g \) is the \( n \times n \) matrix of second derivatives:
-  \[
+- **Hessian**: For a scalar-valued function $g: \mathbb{R}^n \to \mathbb{R}$, the Hessian $H_g$ is the $n \times n$ matrix of second derivatives:
+  $$
   (H_g)_{ij} = \frac{\partial^2 g}{\partial x_i \partial x_j}.
-  \]
+  $$
 
-- **Hessian-vector product (HVP)**: For \( v \in \mathbb{R}^n \),
-  \[
+- **Hessian-vector product (HVP)**: For $v \in \mathbb{R}^n$,
+  $$
   H_g v = \left.\frac{d}{d\epsilon} \nabla g(x + \epsilon v) \right|_{\epsilon=0},
-  \]
-  i.e., the directional derivative of the gradient of \( g \) in direction \( v \).
+  $$
+  i.e., the directional derivative of the gradient of $g$ in direction $v$.
 
 ## 3. Autograd Perspectives
 
@@ -44,23 +44,23 @@ Jacobian-vector products (JVPs) and Hessian-vector products (HVPs) are fundament
 
 ## 4. Simple Worked Example
 
-Consider a scalar function \( g(x) = \frac{1}{2} x^\top A x \) where \( A \) is a symmetric matrix and \( x \in \mathbb{R}^n \).
+Consider a scalar function $g(x) = \frac{1}{2} x^\top A x$ where $A$ is a symmetric matrix and $x \in \mathbb{R}^n$.
 
 - Gradient:
-  \[
+  $$
   \nabla g(x) = A x.
-  \]
+  $$
 
 - Hessian:
-  \[
+  $$
   H_g = A.
-  \]
+  $$
 
 - JVP of \( \nabla g \) in direction \( v \):
-  \[
+  $$
   J_{\nabla g} v = A v,
-  \]
-  which is exactly the Hessian-vector product \( H_g v \).
+  $$
+  which is exactly the Hessian-vector product $H_g v$.
 
 This illustrates that HVPs can be computed as JVPs of gradients.
 
