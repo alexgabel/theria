@@ -166,6 +166,12 @@ Phase 4 plan: supply the missing derivative explicitly via JVP/HVP rules in a
 custom attention operator (e.g., `sdpa_custom`) rather than relying on fused
 kernels’ backward graphs.
 
+**Contract statement:** Optimized SDPA/FlashAttention provides a backward that is
+not itself differentiable, so $\partial/\partial \theta$ of $\partial L/\partial \theta$
+fails. Therefore, meta-learning that requires HVP/JVP through attention must use
+(a) explicit attention ops composed of differentiable primitives, or (b) a custom
+operator that exposes explicit JVP/HVP (or gradgrad) rules.
+
 ## Phase 3 Goal: Locating the Attention Autograd Boundary
 
 The experimental plan for Phase 3 involves systematically swapping the current

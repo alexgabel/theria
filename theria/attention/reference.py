@@ -1,6 +1,7 @@
 # theria/attention/reference.py
 # NOTE: This implementation is for correctness and higher-order autodiff only.
 # It is intentionally slow and unfused.
+# TODO(phase5): remove sdpa_reference alias once sdpa_function is fully migrated
 
 import torch
 import math
