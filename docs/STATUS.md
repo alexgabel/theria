@@ -38,3 +38,4 @@ Not yet implemented (intentional, future phases):
 Notes:
 - Phase 0/1 are complete and frozen; any future backend must satisfy the existing tests.
 - Phase 2 is complete and verified; current focus is on attention boundary analysis before GPU acceleration or performance optimization.
+- Expected warnings: GPU boundary tests may emit SDPA kernel selection/deprecation warnings (e.g., `sdp_kernel` deprecation, dtype/kernel selection notices). These are expected and do not indicate test failure.
