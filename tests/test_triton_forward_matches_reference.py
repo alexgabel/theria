@@ -28,7 +28,7 @@ def test_triton_forward_matches_reference_cuda():
     try:
         dtype = torch.float16
         q, k, v = _make_inputs(dtype)
-        out_triton = sdpa_custom(q, k, v, backend="triton").to(torch.float32)
+        out_triton = sdpa_custom(q, k, v, backend="triton_ref").to(torch.float32)
         out_ref = reference_attention(q, k, v).to(torch.float32)
         torch.testing.assert_close(out_triton, out_ref, rtol=2e-2, atol=2e-2)
     finally:
@@ -59,7 +59,7 @@ def test_triton_jvp_matches_finite_difference_cuda():
         dv = dv / (dv.norm() + eps)
 
         def f(q, k, v):
-            return sdpa_custom(q, k, v, backend="triton")
+            return sdpa_custom(q, k, v, backend="triton_ref")
 
         jvp_explicit = sdpa_custom_jvp(q, k, v, dq, dk, dv).to(torch.float32)
         jvp_fd = _finite_difference_jvp(f, q, k, v, dq, dk, dv, eps=1e-3).to(torch.float32)

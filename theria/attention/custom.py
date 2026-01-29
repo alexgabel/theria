@@ -9,7 +9,7 @@ import torch
 
 from .reference import reference_attention
 from theria.autograd.sdpa_custom_function import SDPACustom
-from theria.attention.triton_qk import triton_qk
+from theria.attention.triton_qk import triton_qk, triton_qk_fast, triton_qk_softmax
 
 
 def sdpa_custom(q, k, v, *, backend: str = "reference"):
@@ -27,10 +27,23 @@ def sdpa_custom(q, k, v, *, backend: str = "reference"):
         return reference_attention(q, k, v)
     if backend == "custom":
         return SDPACustom.apply(q, k, v)
-    if backend in ("triton_qk", "triton"):
+    if backend in ("triton_qk", "triton_ref", "triton"):
         # Triton for QK^T, PyTorch for softmax and PV
         scores = triton_qk(q, k).to(torch.float32) / (q.shape[-1] ** 0.5)
         probs = torch.softmax(scores, dim=-1)
+        v_cast = v.to(probs.dtype)
+        out = torch.matmul(probs, v_cast)
+        return out.to(q.dtype)
+    if backend == "triton_fast":
+        # Fast Triton QK^T (tensor-core friendly); expect numerical drift.
+        scores = triton_qk_fast(q, k).to(torch.float32) / (q.shape[-1] ** 0.5)
+        probs = torch.softmax(scores, dim=-1)
+        v_cast = v.to(probs.dtype)
+        out = torch.matmul(probs, v_cast)
+        return out.to(q.dtype)
+    if backend == "triton_fast_fused":
+        # Fused QK + scale + softmax in Triton; PV remains in PyTorch. Fast path.
+        probs = triton_qk_softmax(q, k).to(torch.float32)
         v_cast = v.to(probs.dtype)
         out = torch.matmul(probs, v_cast)
         return out.to(q.dtype)

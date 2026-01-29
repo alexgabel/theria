@@ -23,7 +23,7 @@ def test_triton_double_backward_exists_cuda():
     dv = dv / (dv.norm() + eps)
 
     def loss_fn(q, k, v):
-        return sdpa_custom(q, k, v, backend="triton").sum()
+        return sdpa_custom(q, k, v, backend="triton_ref").sum()
 
     loss = loss_fn(q, k, v)
     grads = torch.autograd.grad(loss, (q, k, v), create_graph=True)
