@@ -41,6 +41,9 @@ Phase 6 (in progress):
 - Preserve analytic JVP/HVP while introducing a Triton/FlashAttention-style forward
 - Identify minimal saved intermediates so fused forward remains differentiable
 - Keep sdpa_custom_jvp and sdpa_custom_hvp as invariant contracts
+- Triton QK forward kernel wired with Python backward (gradcheck + gradgrad witness)
+- Forward correctness verified vs reference (GPU tests)
+- Not yet: fused backward, fused JVP rule, performance benchmarks
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

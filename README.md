@@ -37,6 +37,8 @@ Phase 4 introduces a custom attention operator that satisfies the higher-order d
 Phase 5: Forward-mode autodiff (JVP) correctness for attention, enabling implicit differentiation, meta-learning, and bilevel optimization.
 Custom attention exposes analytic JVP/HVP, validated against finite differences and autograd; optimized SDPA paths currently fail forward-mode by design.
 
+Phase 6 (scaffold): Triton QK forward kernel with Python backward; forward correctness, gradcheck, and gradgrad existence are verified. Not yet: fused backward, fused JVP rule, or performance benchmarks.
+
 ---
 
 ## Phase 2 Results (Closed)
