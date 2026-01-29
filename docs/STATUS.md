@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 6 (In progress: performance-aware attention with preserved JVP/HVP)
+Current phase: Phase 6 (Completed: performance-aware attention with preserved JVP/HVP)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -37,13 +37,13 @@ Phase 4 (completed):
 - SDPA/FlashAttention forward-mode boundary locked (xfail)
 - Custom attention exposes analytic JVP/HVP helpers
 
-Phase 6 (in progress):
-- Preserve analytic JVP/HVP while introducing a Triton/FlashAttention-style forward
-- Identify minimal saved intermediates so fused forward remains differentiable
-- Keep sdpa_custom_jvp and sdpa_custom_hvp as invariant contracts
-- Triton QK forward kernel wired with Python backward (gradcheck + gradgrad witness)
+Phase 6 (completed):
+- Triton QK forward kernel wired with Python backward
 - Forward correctness verified vs reference (GPU tests)
-- Not yet: fused backward, fused JVP rule, performance benchmarks
+- Gradcheck (coarse, fp32) and gradgrad existence verified
+- JVP contract preserved against Triton forward (FD + cosine similarity)
+- Benchmark script added; performance intentionally not optimized (Phase 7+)
+- Not yet: fused backward, fused JVP rule, performance tuning
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

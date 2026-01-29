@@ -5,6 +5,11 @@ import torch
 
 from theria.attention.custom import sdpa_custom
 
+# Performance note:
+# The Phase 6 Triton QK kernel is correctness-first and intentionally disables
+# tensor cores, fusion, and TF32. Benchmarks will be much slower than cuBLAS.
+# This is expected. Performance optimization is deferred to Phase 7+.
+
 
 def bench(fn, warmup=10, iters=50):
     # Warmup
