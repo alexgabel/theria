@@ -1,7 +1,9 @@
+# theria/attention/reference.py
+
 import torch
 import math
 
-def sdpa_reference(q, k, v):
+def reference_attention(q, k, v):
     """
     Reference scaled dot-product attention.
     q: (B, H, N, D)
