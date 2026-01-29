@@ -8,6 +8,7 @@ import torch
 
 from tests._graph_inspect import can_double_backward
 from theria.attention.custom import sdpa_custom
+from theria.attention.reference_hvp import sdpa_jvp
 
 
 def _make_qkv(device, dtype, B=1, H=1, T=4, D=8):
@@ -121,3 +122,30 @@ def test_boundary_sdpa_function_double_backward_fails_cpu():
     assert not can_double_backward(out, [q, k, v])
     with pytest.raises(RuntimeError):
         _hvp_double_backward(loss_fn, q, k, v, dq, dk, dv)
+
+
+@pytest.mark.xfail(reason="SDPAFunction does not support forward-mode JVP")
+def test_boundary_sdpa_function_jvp_fails_cpu():
+    from theria.autograd.sdpa_function import SDPAFunction
+
+    device = torch.device("cpu")
+    dtype = torch.double
+    torch.manual_seed(0)
+
+    q, k, v = _make_qkv(device, dtype)
+    dq, dk, dv = (torch.randn_like(q), torch.randn_like(k), torch.randn_like(v))
+    eps = 1e-12
+    dq = dq / (dq.norm() + eps)
+    dk = dk / (dk.norm() + eps)
+    dv = dv / (dv.norm() + eps)
+
+    def f(q, k, v):
+        return SDPAFunction.apply(q, k, v)
+
+    try:
+        _, jvp_sdpa = torch.autograd.functional.jvp(f, (q, k, v), (dq, dk, dv))
+    except Exception:
+        pytest.xfail("SDPAFunction JVP unsupported")
+
+    jvp_ref = sdpa_jvp(q, k, v, dq, dk, dv)
+    torch.testing.assert_close(jvp_sdpa, jvp_ref, rtol=1e-4, atol=1e-4)

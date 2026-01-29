@@ -17,6 +17,32 @@ import math
 import torch
 
 
+def sdpa_jvp(q, k, v, dq, dk, dv):
+    """
+    Explicit Jacobian–vector product for SDPA output:
+        J_sdpa(q,k,v) · (dq, dk, dv)
+    No autograd; analytic forward-mode rule.
+    """
+    d = q.shape[-1]
+    scale = 1 / math.sqrt(d)
+
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    probs = torch.softmax(scores, dim=-1)
+
+    def softmax_jvp(delta_scores):
+        inner = (delta_scores * probs).sum(dim=-1, keepdim=True)
+        return probs * (delta_scores - inner)
+
+    scores_dir = (
+        torch.matmul(dq, k.transpose(-2, -1))
+        + torch.matmul(q, dk.transpose(-2, -1))
+    ) * scale
+    probs_dir = softmax_jvp(scores_dir)
+
+    out_dir = torch.matmul(probs_dir, v) + torch.matmul(probs, dv)
+    return out_dir
+
+
 def sdpa_hvp(q, k, v, vq, vk, vv):
     """
     Explicit Hessian–vector product for

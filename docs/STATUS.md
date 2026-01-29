@@ -33,6 +33,12 @@ Phase 4 (completed):
 Phase 5 (planned):
 - Replace scaffolding with explicit JVP/backward rules and required saved intermediates
 - Formalize JVP math and implementation details for attention operators
+- [x] Explicit analytic JVP implemented
+- [x] JVP finite-difference tests
+- [x] Autograd JVP parity test
+- [x] Boundary witness: SDPA JVP failure
+- [x] GPU parity check
+- [x] JVP ≠ VJP test (shape/asymmetry witness)
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

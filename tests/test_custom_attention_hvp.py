@@ -51,9 +51,25 @@ def _make_inputs(device):
     return q, k, v, dq, dk, dv
 
 
-@pytest.mark.parametrize("device", ["cpu"] + (["cuda"] if torch.cuda.is_available() else []))
-def test_custom_attention_hvp_matches_finite_difference(device):
-    device = torch.device(device)
+def test_custom_attention_hvp_matches_finite_difference_cpu():
+    device = torch.device("cpu")
+    q, k, v, dq, dk, dv = _make_inputs(device)
+
+    def loss_fn(q, k, v):
+        return sdpa_custom(q, k, v, backend="custom").sum()
+
+    hvp_explicit = sdpa_custom_hvp(q, k, v, dq, dk, dv)
+    hvp_fd = _finite_difference_hvp(loss_fn, q, k, v, dq, dk, dv, eps=1e-3)
+
+    for explicit, fd in zip(hvp_explicit, hvp_fd):
+        torch.testing.assert_close(explicit, fd, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.gpu
+def test_custom_attention_hvp_matches_finite_difference_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available, skipping GPU HVP test.")
+    device = torch.device("cuda")
     q, k, v, dq, dk, dv = _make_inputs(device)
 
     def loss_fn(q, k, v):

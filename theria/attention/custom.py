@@ -32,3 +32,10 @@ def sdpa_custom_hvp(q, k, v, dq, dk, dv):
     Explicit HVP for the custom backend (public helper for tests and debugging).
     """
     return SDPACustom.hvp(q, k, v, dq, dk, dv)
+
+
+def sdpa_custom_jvp(q, k, v, dq, dk, dv):
+    """
+    Explicit JVP for the custom backend (public helper for tests and debugging).
+    """
+    return SDPACustom.jvp(q, k, v, dq, dk, dv)

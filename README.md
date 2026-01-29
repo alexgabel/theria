@@ -25,7 +25,7 @@ theria explores how to:
 - **Phase 2** — HVP/JVP semantics and meta-learning support ✅  
 - **Phase 3** — Attention Autograd Boundary Analysis ✅  
 - **Phase 4** — Custom attention operator exposing explicit JVP/HVP (systems + math; performance later) *(in progress)*  
-- **Phase 5** – Attention-Specific JVP Mathematics *(future)*
+- **Phase 5** — JVP-first attention (forward-mode autodiff) *(planned)*
 - **Phase 6** – Performance-Aware Reintroduction *(future)*  
 
 All current tests run on CPU. GPU support is intentionally deferred.
@@ -33,6 +33,8 @@ All current tests run on CPU. GPU support is intentionally deferred.
 A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
 
 Phase 4 introduces a custom attention operator that satisfies the higher-order differentiation contract established in Phase 3.
+
+Phase 5: Forward-mode autodiff (JVP) correctness for attention, enabling implicit differentiation, meta-learning, and bilevel optimization.
 
 ---
 

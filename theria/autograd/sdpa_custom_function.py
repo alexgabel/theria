@@ -7,7 +7,7 @@ Designed for correctness and higher-order autodiff (JVP/HVP) — not performance
 import math
 import torch
 
-from theria.attention.reference_hvp import sdpa_hvp
+from theria.attention.reference_hvp import sdpa_hvp, sdpa_jvp
 
 
 class SDPACustom(torch.autograd.Function):
@@ -58,3 +58,11 @@ class SDPACustom(torch.autograd.Function):
         Uses the analytic reference HVP to stay aligned with the math contract.
         """
         return sdpa_hvp(q, k, v, dq, dk, dv)
+
+    @staticmethod
+    def jvp(q, k, v, dq, dk, dv):
+        """
+        Explicit Jacobian–vector product helper for tests.
+        Uses the analytic reference JVP to stay aligned with the math contract.
+        """
+        return sdpa_jvp(q, k, v, dq, dk, dv)

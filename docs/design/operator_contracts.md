@@ -57,6 +57,7 @@ $$
 ### Phase 5 requirement
 
 - Provide explicit JVP/backward rules (and saved intermediates) so higher-order differentiation is supported without autograd-in-backward scaffolding.
+- JVP must be validated against finite differences and (when available) autograd JVP parity.
 
 ## Meta-learning requirement
 

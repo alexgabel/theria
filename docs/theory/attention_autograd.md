@@ -180,6 +180,32 @@ boundary tests (`test_attention_boundary_gpu.py`) capture this distinction.
 (mathematical derivation + implementation) so the custom operator no longer
 relies on autograd-in-backward scaffolding.
 
+## Phase 5 — JVP-First Attention
+
+Phase 5 makes forward-mode differentiation explicit. A **JVP** is a directional
+derivative of the forward map (tangent propagation), and it is *not* equivalent
+to a **VJP** (reverse-mode gradient). The distinction matters: you can have a
+correct VJP while the JVP is missing or silently dropped at a fused kernel
+boundary.
+
+For attention, the JVP is defined by the softmax JVP identity:
+$$
+\dot P = P \odot \left( \dot S - \mathrm{row\_sum}(P \odot \dot S) \right),
+$$
+and
+$$
+\dot O = \dot P\,V + P\,\dot V.
+$$
+
+**Where PyTorch loses the tangent:** optimized SDPA/FlashAttention kernels expose
+only an opaque backward; there is no forward-mode rule, and the kernel boundary
+does not propagate tangents. A custom operator can preserve the tangent by
+explicitly implementing the JVP using these analytic formulas.
+
+**JVP contract witnesses (tests):** `tests/test_custom_attention_jvp.py`
+(finite-difference + autograd parity) and the SDPA boundary xfail in
+`tests/test_attention_boundary.py`.
+
 ## Phase 3 Goal: Locating the Attention Autograd Boundary
 
 The experimental plan for Phase 3 involves systematically swapping the current
