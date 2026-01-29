@@ -35,6 +35,7 @@ A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
 Phase 4 introduces a custom attention operator that satisfies the higher-order differentiation contract established in Phase 3.
 
 Phase 5: Forward-mode autodiff (JVP) correctness for attention, enabling implicit differentiation, meta-learning, and bilevel optimization.
+Custom attention exposes analytic JVP/HVP, validated against finite differences and autograd; optimized SDPA paths currently fail forward-mode by design.
 
 ---
 
