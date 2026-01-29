@@ -129,8 +129,10 @@ custom backward implementations.
 
 When attempting to compute a Hessian–vector product via double backward
 (e.g. differentiating ⟨∇L, v⟩), PyTorch raises an error indicating that the
-relevant tensors do not require gradients. Autograd cannot trace Jacobian–vector
-products *through* the backward pass because the backward graph is opaque.
+relevant tensors do not require gradients (e.g., `RuntimeError: element 0 of
+tensors does not require grad and does not have a grad_fn`). Autograd cannot
+trace Jacobian–vector products *through* the backward pass because the backward
+graph is opaque.
 
 ### Design contract
 
