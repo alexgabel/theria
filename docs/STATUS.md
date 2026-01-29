@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 6 (Completed: performance-aware attention with preserved JVP/HVP)
+Current phase: Phase 7 (In progress: performance-oriented Triton attention)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -44,6 +44,24 @@ Phase 6 (completed):
 - JVP contract preserved against Triton forward (FD + cosine similarity)
 - Benchmark script added; performance intentionally not optimized (Phase 7+)
 - Not yet: fused backward, fused JVP rule, performance tuning
+
+Phase 7 (in progress):
+- Add explicit performance modes: `triton_ref` vs `triton_fast`
+- Enable tensor cores (opt-in) and document numerical tradeoffs
+- Replace QK kernel with canonical Triton matmul pattern
+- Fuse softmax minimally (QK + scale + softmax; keep PV separate)
+- Update benchmarks (reference vs triton_ref vs triton_fast; presets)
+- Adjust tests: strict for ref/custom/triton_ref; relaxed for triton_fast
+
+Phase 7 exit criteria:
+- Triton forward within ~2–4× of cuBLAS
+- First-order backward correct
+- Double backward exists (may be slow)
+- All correctness tests still pass
+
+Phase 8 (planned): Fully fused SDPA forward (QK → softmax → PV) with stable block softmax and minimal intermediates.
+Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
+Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

@@ -39,6 +39,8 @@ Custom attention exposes analytic JVP/HVP, validated against finite differences 
 
 Phase 6 (scaffold): Triton QK forward kernel with Python backward; forward correctness, gradcheck, and gradgrad existence are verified. Not yet: fused backward, fused JVP rule, or performance benchmarks.
 
+Phase 7 — Performance-Oriented Triton Attention: enable tensor cores, larger tiles, and partial fusion while preserving correctness via separate “reference” and “fast” backends. Later phases fuse the full SDPA and replace autograd-in-backward with explicit kernels, enabling higher-order meta-learning research.
+
 ---
 
 ## Phase 2 Results (Closed)
