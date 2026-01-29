@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 5 (Completed: JVP-first custom attention)
+Current phase: Phase 6 (In progress: performance-aware attention with preserved JVP/HVP)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -30,12 +30,17 @@ Phase 4 (completed):
 - Boundary tests passing for custom attention; fused SDPA/FlashAttention remains expected-fail
 - Correctness-first scaffolding in place (autograd-in-backward) for higher-order verification
 
-Phase 5 (completed):
+- Phase 5 (completed):
 - Explicit analytic JVP implemented
 - JVP matches finite differences and autograd on CPU + GPU
 - JVP ≠ VJP contract enforced
 - SDPA/FlashAttention forward-mode boundary locked (xfail)
 - Custom attention exposes analytic JVP/HVP helpers
+
+Phase 6 (in progress):
+- Preserve analytic JVP/HVP while introducing a Triton/FlashAttention-style forward
+- Identify minimal saved intermediates so fused forward remains differentiable
+- Keep sdpa_custom_jvp and sdpa_custom_hvp as invariant contracts
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels
