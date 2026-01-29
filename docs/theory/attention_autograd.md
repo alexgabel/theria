@@ -162,6 +162,10 @@ directional derivative) of the attention output with respect to `(Q, K, V)`;
 without it, grad-of-grad paths remain broken regardless of forward/backward
 correctness.
 
+Phase 4 plan: supply the missing derivative explicitly via JVP/HVP rules in a
+custom attention operator (e.g., `sdpa_custom`) rather than relying on fused
+kernels’ backward graphs.
+
 ## Phase 3 Goal: Locating the Attention Autograd Boundary
 
 The experimental plan for Phase 3 involves systematically swapping the current

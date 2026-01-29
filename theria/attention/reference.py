@@ -18,6 +18,6 @@ def reference_attention(q, k, v):
     return torch.matmul(probs, v)
 
 
-# --- Backwards-compatible aliases ---
+# --- Backwards-compatible alias (legacy import path) ---
+# NOTE: Keep this alias until sdpa_function.py is migrated.
 sdpa_reference = reference_attention
-explicit_attention = reference_attention

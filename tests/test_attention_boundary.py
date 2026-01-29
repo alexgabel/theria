@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from tests._graph_inspect import can_double_backward
+from theria.attention.custom import sdpa_custom
 
 
 def _make_qkv(device, dtype, B=1, H=1, T=4, D=8):
@@ -59,6 +60,31 @@ def test_boundary_reference_attention_supports_double_backward_cpu():
     # NOTE: reductions (like .sum()) may introduce benign detached edges in the graph,
     # but these do not affect the semantic correctness of higher-order differentiation.
 
+
+    hvp_q, hvp_k, hvp_v = _hvp_double_backward(loss_fn, q, k, v, dq, dk, dv)
+    assert torch.isfinite(hvp_q).all()
+    assert torch.isfinite(hvp_k).all()
+    assert torch.isfinite(hvp_v).all()
+
+
+def test_boundary_custom_attention_supports_double_backward_cpu():
+    device = torch.device("cpu")
+    dtype = torch.double
+    torch.manual_seed(0)
+
+    q, k, v = _make_qkv(device, dtype)
+    dq, dk, dv = (torch.randn_like(q), torch.randn_like(k), torch.randn_like(v))
+    eps = 1e-12
+    dq = dq / (dq.norm() + eps)
+    dk = dk / (dk.norm() + eps)
+    dv = dv / (dv.norm() + eps)
+
+    def loss_fn(q, k, v):
+        return sdpa_custom(q, k, v, backend="custom").sum()
+
+    out = loss_fn(q, k, v)
+    assert out.grad_fn is not None
+    assert can_double_backward(out, [q, k, v])
 
     hvp_q, hvp_k, hvp_v = _hvp_double_backward(loss_fn, q, k, v, dq, dk, dv)
     assert torch.isfinite(hvp_q).all()

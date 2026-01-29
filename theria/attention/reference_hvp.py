@@ -20,7 +20,7 @@ import torch
 def sdpa_hvp(q, k, v, vq, vk, vv):
     """
     Explicit Hessian–vector product for
-        L = sum(sdpa_reference(q, k, v))
+        L = sum(reference_attention(q, k, v))
     Returns hvp for (q, k, v) directions.
     """
     d = q.shape[-1]

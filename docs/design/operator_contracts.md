@@ -48,6 +48,11 @@ $$
 - Kernel must expose a JVP of the attention output with respect to (Q, K, V) or an equivalent directional-derivative rule sufficient to construct HVPs.
 - Compliance = passes the `tests/test_attention_boundary_*` suite (e.g., `tests/test_attention_boundary_gpu.py`), which explicitly checks forward, backward, and grad-of-grad behavior.
 
+### Phase 4 operator: `sdpa_custom`
+
+- Public entrypoint: `sdpa_custom(q, k, v, backend=\"custom\")`
+- Autograd context (`ctx`) must retain the quantities needed for JVP/HVP (e.g., `probs`, `logsumexp`/normalizer, and the input tensors) so higher-order rules can be applied explicitly.
+
 ## Meta-learning requirement
 
 For MAML with inner loop step:
