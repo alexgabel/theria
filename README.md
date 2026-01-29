@@ -41,6 +41,8 @@ Phase 6 (scaffold): Triton QK forward kernel with Python backward; forward corre
 
 Phase 7 — Performance-Oriented Triton Attention: enable tensor cores, larger tiles, and partial fusion while preserving correctness via separate “reference” and “fast” backends. Later phases fuse the full SDPA and replace autograd-in-backward with explicit kernels, enabling higher-order meta-learning research.
 
+Phase 8 — Full Fused SDPA Forward: a single Triton kernel for QK → softmax → PV with block-wise stable softmax, forward correctness tests, and first-order gradients via fallback or explicit skip, while preparing minimal intermediates for Phase 9.
+
 ---
 
 ## Phase 2 Results (Closed)

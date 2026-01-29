@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 7 (In progress: performance-oriented Triton attention)
+Current phase: Phase 8 (In progress: fully fused SDPA forward)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -59,7 +59,14 @@ Phase 7 exit criteria:
 - Double backward exists (may be slow)
 - All correctness tests still pass
 
-Phase 8 (planned): Fully fused SDPA forward (QK → softmax → PV) with stable block softmax and minimal intermediates.
+Phase 8 (in progress):
+- Add `triton_fused` backend with a single fused SDPA forward kernel
+- Block-wise stable softmax (online m/l accumulation), fp32 accumulators
+- Forward tests vs reference (fp16/bf16) with reasonable tolerances
+- First-order grads available (fallback backward or explicit skip)
+- Benchmarks include fused backend
+- Document what is supported and what is not
+
 Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
 Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
 
