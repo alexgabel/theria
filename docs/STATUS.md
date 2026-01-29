@@ -1,6 +1,6 @@
 ## Project status
 
-Current phase: Phase 4 (Custom attention with explicit JVP/HVP contract)
+Current phase: Phase 5 (Planned: explicit JVP/backward rules)
 
 Completed (sealed):
 - Operator contract (`sdpa`) defined and stable
@@ -25,10 +25,14 @@ Phase 3 (completed):
 - Precisely located the missing derivative edge in SDPA attention (opaque backward graph / missing JVP)
 - Established the higher-order boundary contract that future kernels must satisfy
 
-Phase 4 goals:
-- Introduce a custom attention operator that explicitly exposes JVP/HVP information for (Q, K, V)
-- Ensure the new operator passes the `test_attention_boundary_*` suite (grad-of-grad included)
-- Prepare for later performance work without sacrificing the established higher-order contract
+Phase 4 (completed):
+- Custom attention operator with explicit HVP support (double backward + analytic HVP)
+- Boundary tests passing for custom attention; fused SDPA/FlashAttention remains expected-fail
+- Correctness-first scaffolding in place (autograd-in-backward) for higher-order verification
+
+Phase 5 (planned):
+- Replace scaffolding with explicit JVP/backward rules and required saved intermediates
+- Formalize JVP math and implementation details for attention operators
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels
@@ -37,5 +41,5 @@ Not yet implemented (intentional, future phases):
 
 Notes:
 - Phase 0/1 are complete and frozen; any future backend must satisfy the existing tests.
-- Phase 2 is complete and verified; current focus is on attention boundary analysis before GPU acceleration or performance optimization.
+- Phase 2 is complete and verified; correctness is prioritized before GPU acceleration or performance optimization.
 - Expected warnings: GPU boundary tests may emit SDPA kernel selection/deprecation warnings (e.g., `sdp_kernel` deprecation, dtype/kernel selection notices). These are expected and do not indicate test failure.

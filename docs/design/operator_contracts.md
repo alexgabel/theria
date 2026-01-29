@@ -52,6 +52,11 @@ $$
 
 - Public entrypoint: `sdpa_custom(q, k, v, backend=\"custom\")`
 - Autograd context (`ctx`) must retain the quantities needed for JVP/HVP (e.g., `probs`, `logsumexp`/normalizer, and the input tensors) so higher-order rules can be applied explicitly.
+- Phase 4 success = explicit HVP support (double backward or analytic HVP) and boundary tests passing; no standalone JVP implementation is required yet.
+
+### Phase 5 requirement
+
+- Provide explicit JVP/backward rules (and saved intermediates) so higher-order differentiation is supported without autograd-in-backward scaffolding.
 
 ## Meta-learning requirement
 

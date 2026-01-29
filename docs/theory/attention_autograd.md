@@ -172,6 +172,14 @@ fails. Therefore, meta-learning that requires HVP/JVP through attention must use
 (a) explicit attention ops composed of differentiable primitives, or (b) a custom
 operator that exposes explicit JVP/HVP (or gradgrad) rules.
 
+**CPU vs GPU boundary:** CPU reference attention (explicit primitives) supports
+double backward/HVP, while GPU fused SDPA/FlashAttention paths do not; the GPU
+boundary tests (`test_attention_boundary_gpu.py`) capture this distinction.
+
+**Phase 5 pointer:** Phase 5 will formalize the explicit JVP/backward rules
+(mathematical derivation + implementation) so the custom operator no longer
+relies on autograd-in-backward scaffolding.
+
 ## Phase 3 Goal: Locating the Attention Autograd Boundary
 
 The experimental plan for Phase 3 involves systematically swapping the current
