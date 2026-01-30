@@ -1,8 +1,8 @@
 # theria
 
-theria is a research toolkit for **higher-order learning with modern neural operators**. It focuses on making differentiable operators—starting with scaled dot-product attention—*correctly* compatible with meta-learning, implicit differentiation, and higher-order optimization, before addressing kernel-level performance.
+theria is a research toolkit for **higher-order learning with modern neural operators**. It focuses on making differentiable operators—starting with scaled dot-product attention—*correctly* compatible with meta-learning, implicit differentiation, and higher-order optimization, while progressively reintroducing kernel-level performance.
 
-The project is explicitly **correctness-first**: mathematical contracts and higher-order differentiation semantics are established on CPU before any GPU/Triton/CUDA work is introduced.
+The project is explicitly **correctness-first**: mathematical contracts and higher-order differentiation semantics are established before performance work, and preserved as kernels evolve.
 
 ---
 
@@ -20,32 +20,16 @@ theria explores how to:
 
 ## Project status
 
-- **Phase 0** — Operator contract and reference semantics (CPU) ✅  
-- **Phase 1** — First-order autograd correctness (`gradcheck`) ✅  
-- **Phase 2** — HVP/JVP semantics and meta-learning support ✅  
-- **Phase 3** — Attention Autograd Boundary Analysis ✅  
-- **Phase 4** — Custom attention operator exposing explicit JVP/HVP ✅  
-- **Phase 5** — JVP-first attention (forward-mode autodiff) ✅  
-- **Phase 6** — Triton QK scaffold with correctness locks ✅  
-- **Phase 7** — Performance-oriented Triton attention ✅  
-- **Phase 8** — Fully fused SDPA forward (in progress)  
-- **Phase 9** — Explicit Triton backward + JVP/HVP kernels (planned)  
-- **Phase 10** — Meta-learning & theory integration (planned)  
+Current work is tracked in `docs/STATUS.md`. That file is the single source of truth for:
+- active phase and exit criteria
+- kernel contracts and limitations
+- golden CI/benchmark commands
+- known limitations and boundary tests
 
-A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
-
-Phase 4 introduces a custom attention operator that satisfies the higher-order differentiation contract established in Phase 3.
-
-Phase 5: Forward-mode autodiff (JVP) correctness for attention, enabling implicit differentiation, meta-learning, and bilevel optimization.
-Custom attention exposes analytic JVP/HVP, validated against finite differences and autograd; optimized SDPA paths currently fail forward-mode by design.
-
-Phase 6 (scaffold): Triton QK forward kernel with Python backward; forward correctness, gradcheck, and gradgrad existence are verified. Not yet: fused backward, fused JVP rule, or performance benchmarks.
-
-Phase 7 — Performance-Oriented Triton Attention: enable tensor cores, larger tiles, and partial fusion while preserving correctness via separate “reference” and “fast” backends. Later phases fuse the full SDPA and replace autograd-in-backward with explicit kernels, enabling higher-order meta-learning research.
-
-Phase 8 — Full Fused SDPA Forward: a single Triton kernel for QK → softmax → PV with block-wise stable softmax, forward correctness tests, and first-order gradients via fallback or explicit skip, while preparing minimal intermediates for Phase 9.
-
-Key insight from Phase 8: the autodiff boundary is not the forward kernel, it is the backward. Forward fusion is comparatively easy and performant; backward fusion is where higher-order gradients break in practice. Phase 9 is therefore about reclaiming autodiff structure inside a fused kernel, not just going faster.
+If you are new to the repo, start with:
+- `docs/STATUS.md`
+- `docs/theory/attention_autograd.md`
+- `docs/design/operator_contracts.md`
 
 ---
 
@@ -58,59 +42,18 @@ Key insight from Phase 8: the autodiff boundary is not the forward kernel, it is
 
 ---
 
-## Current scope
+## Current scope (high level)
 
-Implemented:  
-- Public SDPA operator contract (`sdpa`)  
-- Reference SDPA implementation  
-- Custom `autograd.Function`  
-- Forward equivalence tests vs reference  
-- First-order gradient correctness tests  
-- Numerical and autograd-based HVP/JVP validation  
-- Meta-learning compatibility (MAML-style inner/outer loops)  
-- Clean, reproducible environment and packaging  
-- Triton QK scaffolds (reference/fast) and fused forward path (GPU)  
+Implemented:
+- Reference SDPA and operator-level contracts
+- Explicit HVP/JVP for attention (analytic, validated)
+- Boundary tests that lock known failures
+- Triton forward paths (QK scaffold, partial fusion, and fully fused forward)
+- Benchmarks and phase-specific tests
 
-Known limitations:  
-- Fused Triton backward uses reference fallback (Phase 8)  
-
-Out of scope (for now):  
-- Fully fused backward kernels  
-- Explicit JVP/HVP kernels in Triton  
-- Performance tuning beyond Phase 8  
-
----
-
-## Phase 3 Goal
-
-Where exactly does optimized SDPA break higher-order differentiation?  
-
-This phase focuses on diagnosing the autograd boundary failures of optimized attention implementations, without yet attempting fixes.  
-
-### Phase 3 — Attention Autograd Boundary Analysis (Planned)
-
-Objective  
-Identify the precise autograd boundary where optimized attention implementations (e.g. FlashAttention / fused SDPA) break higher-order differentiation.
-
-Key questions  
-- Which derivative is missing: JVP, VJP, or saved intermediate?  
-- Is the failure silent or explicit?  
-- Does backward succeed while grad-of-grad fails?  
-- Is the issue backend-specific or operator-intrinsic?  
-
-Method  
-- Compare explicit attention vs SDPA math vs fused SDPA  
-- Inspect autograd graphs and saved tensors  
-- Validate HVP existence via:  
-  - double backward (when possible)  
-  - finite differences  
-  - reproduce failures deterministically  
-
-Outcome  
-A precise operator-level failure contract:  
-“Given inputs Q, K, V, the optimized attention path does not expose X, therefore Y (HVP/JVP) cannot be computed.”  
-
-This contract defines the requirements for Phase 4.
+Known limitations:
+- Fully fused backward is not yet implemented
+- JVP/HVP in Triton kernels is not yet implemented
 
 ---
 
@@ -125,7 +68,7 @@ This repository is intended to be readable, reviewable, and useful to researcher
 
 ---
 
-## Getting started (CPU)
+## Getting started
 
 ```bash
 conda env create -f environment.yml
@@ -136,8 +79,20 @@ pytest -q
 
 A manual smoke test for SDPA forward/backward is available under `scripts/`.
 
+## Contributing / workflow
+
+Golden sanity commands (CPU + GPU + perf smoke):
+
+```bash
+pytest -q
+pytest -m gpu -q
+CUDA_VISIBLE_DEVICES=0 python scripts/bench_sdpa.py --preset medium --dtype float16
+```
+
+See `docs/STATUS.md` for the active phase, exit criteria, and required constraints.
+
 ---
 
 ## Disclaimer
 
-theria is a research codebase under active development. APIs may change until Phase 4 is complete and merged into `main`.
+theria is a research codebase under active development. APIs and backends may change as phases progress; consult `docs/STATUS.md` before extending or refactoring. 

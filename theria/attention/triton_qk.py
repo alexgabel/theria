@@ -249,6 +249,7 @@ def _fused_sdpa_kernel(
     scale,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, BLOCK_DV: tl.constexpr,
 ):
+    # PHASE 9: explicit backward kernels start here (forward saves m_i, l_i for backward/JVP/HVP).
     pid_bh = tl.program_id(0)
     pid_m = tl.program_id(1)
 
