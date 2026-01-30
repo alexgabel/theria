@@ -29,3 +29,28 @@ def test_triton_fused_forward_matches_reference_cuda(shape):
         torch.testing.assert_close(out_fused, out_ref, rtol=2e-2, atol=2e-2)
     finally:
         torch.backends.cuda.matmul.allow_tf32 = prev_tf32
+
+
+@pytest.mark.gpu
+def test_triton_fused_handles_zero_rows():
+    """
+    Regression: when T << BLOCK_M many rows are masked, so l_i can be zero.
+    Kernel clamps l_i; outputs must stay finite and match reference for valid rows.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    prev_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        torch.manual_seed(0)
+        q = torch.randn(1, 1, 1, 32, device="cuda", dtype=torch.float16)
+        k = torch.randn_like(q)
+        v = torch.randn_like(q)
+
+        out_fused = sdpa_custom(q, k, v, backend="triton_full_fused")
+        out_ref = sdpa_custom(q, k, v, backend="reference")
+
+        assert torch.isfinite(out_fused).all()
+        torch.testing.assert_close(out_fused.to(torch.float32), out_ref.to(torch.float32), rtol=2e-2, atol=2e-2)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = prev_tf32

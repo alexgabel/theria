@@ -81,6 +81,27 @@ Limitations:
 - D ≤ 64
 - No mask / causal / dropout
 
+## Phase 9 — Explicit Backward + JVP/HVP in Triton (Planned)
+
+Mission: eliminate autograd fallback; own fused SDPA backward, JVP, and (optionally) HVP with explicit numerical control.
+
+Hard deliverables:
+- Explicit backward kernels (dQ, dK, dV) using saved m_i, l_i (no full P materialization)
+- TritonFusedSDPAFunction.backward calls Triton kernels (no reference/autograd matmul)
+- JVP path without PyTorch autograd; HVP via JVP∘VJP or explicit kernel
+- Gradcheck (float64 small shapes) and forward/backward parity vs reference
+
+Planned kernels:
+- sdpa_bwd_dv (Pᵀ @ dO), sdpa_bwd_dq/dk (softmax backward with reconstructed P), optional fused dq/dk
+- JVP kernel (or backward-like reuse) using saved stats
+
+Tests/coverage:
+- Forward vs reference, backward gradcheck, JVP vs autograd.functional.jvp, HVP finite-diff sanity
+- Boundary cases: small/large T,M, fp16/bf16, TF32 on/off, asserts for non-contiguous
+
+Documentation to add:
+- docs/phase9_backward.md and docs/phase9_jvp.md describing saved data, recomputation, stability, and failure modes if assumptions are broken.
+
 Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
 Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
 
