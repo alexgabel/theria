@@ -7,6 +7,7 @@ from theria.attention.custom import sdpa_custom
 
 # Performance note:
 # The correctness-first Triton path is slow; fast modes are opt-in and may drift.
+# Phase 8 backward for fused paths falls back to the reference; benchmark forward only.
 
 
 def bench(fn, warmup=10, iters=50):
@@ -66,15 +67,25 @@ def main():
     ref = lambda: sdpa_custom(q, k, v, backend="reference")
     tri_ref = lambda: sdpa_custom(q, k, v, backend="triton_ref")
     tri_fast = lambda: sdpa_custom(q, k, v, backend="triton_fast")
+    tri_fused = lambda: sdpa_custom(q, k, v, backend="triton_full_fused")
 
     t_ref = bench(ref, warmup=args.warmup, iters=args.iters)
     t_tri_ref = bench(tri_ref, warmup=args.warmup, iters=args.iters)
     t_tri_fast = bench(tri_fast, warmup=args.warmup, iters=args.iters)
+    try:
+        t_tri_fused = bench(tri_fused, warmup=args.warmup, iters=args.iters)
+    except Exception as e:
+        t_tri_fused = None
+        fused_err = e
 
     print(f"B={B} H={H} T={T} M={M} D={D} dtype={args.dtype}")
     print(f"reference   : {t_ref*1e3:.3f} ms/iter")
     print(f"triton_ref  : {t_tri_ref*1e3:.3f} ms/iter")
     print(f"triton_fast : {t_tri_fast*1e3:.3f} ms/iter")
+    if t_tri_fused is not None:
+        print(f"triton_fused: {t_tri_fused*1e3:.3f} ms/iter")
+    else:
+        print(f"triton_fused: FAILED ({fused_err})")
 
 
 if __name__ == "__main__":

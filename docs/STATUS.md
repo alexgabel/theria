@@ -66,9 +66,24 @@ Phase 8 (in progress):
 - First-order grads available (fallback backward or explicit skip)
 - Benchmarks include fused backend
 - Document what is supported and what is not
+- Fused v0 contract (forward-only): contiguous Q,K,V shaped (B,H,T,D)/(B,H,M,D)/(B,H,M,Dv) with Dv=D, no mask/causal/dropout, fp16/bf16 inputs, fp32 accumulation, output cast to input dtype; supported head dims initially in {32, 64, 128}.
 
 Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
 Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
+
+Key insight (Phase 8): the autodiff boundary is not the forward kernel, it is the backward.
+Forward fusion is comparatively easy and performant; backward fusion is where higher-order
+gradients break in practice.
+
+Phase 9 (reframed):
+- Reclaim autodiff structure inside a fused kernel (not just make it fast).
+- Implement explicit fused backward (dQ, dK, dV) using saved (m, l) stats.
+- Implement explicit JVP without Python autograd.
+- Provide HVP support via explicit kernels (no autograd-in-backward).
+
+Phase 10 (scientific goal):
+- Explain why FlashAttention/SDPA break higher-order meta-learning.
+- Characterize the autograd boundary and its dependence on kernel fusion.
 
 Not yet implemented (intentional, future phases):
 - Triton/CUDA kernels

@@ -9,7 +9,7 @@ import torch
 
 from .reference import reference_attention
 from theria.autograd.sdpa_custom_function import SDPACustom
-from theria.attention.triton_qk import triton_qk, triton_qk_fast, triton_qk_softmax
+from theria.attention.triton_qk import triton_qk, triton_qk_fast, triton_qk_softmax, triton_sdpa_fused_autograd
 
 
 def sdpa_custom(q, k, v, *, backend: str = "reference"):
@@ -41,11 +41,18 @@ def sdpa_custom(q, k, v, *, backend: str = "reference"):
         v_cast = v.to(probs.dtype)
         out = torch.matmul(probs, v_cast)
         return out.to(q.dtype)
-    if backend == "triton_fast_fused":
+    if backend == "triton_qk_softmax":
         # Fused QK + scale + softmax in Triton; PV remains in PyTorch. Fast path.
         probs = triton_qk_softmax(q, k).to(torch.float32)
         v_cast = v.to(probs.dtype)
         out = torch.matmul(probs, v_cast)
+        return out.to(q.dtype)
+    if backend == "triton_full_fused":
+        assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous(), "triton_full_fused requires contiguous inputs"
+        assert q.shape[-1] == v.shape[-1], "triton_full_fused requires Dv == D"
+        assert q.shape[-1] <= 64, "triton_full_fused v0 supports D <= 64 only"
+        # Fully fused SDPA forward in Triton; PV fused. Backward falls back to reference.
+        out = triton_sdpa_fused_autograd(q, k, v)
         return out.to(q.dtype)
     raise ValueError(f"Unsupported sdpa_custom backend: {backend}")
 

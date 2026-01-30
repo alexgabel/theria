@@ -24,11 +24,13 @@ theria explores how to:
 - **Phase 1** — First-order autograd correctness (`gradcheck`) ✅  
 - **Phase 2** — HVP/JVP semantics and meta-learning support ✅  
 - **Phase 3** — Attention Autograd Boundary Analysis ✅  
-- **Phase 4** — Custom attention operator exposing explicit JVP/HVP (systems + math; performance later) *(in progress)*  
-- **Phase 5** — JVP-first attention (forward-mode autodiff) *(planned)*
-- **Phase 6** – Performance-Aware Reintroduction *(future)*  
-
-All current tests run on CPU. GPU support is intentionally deferred.
+- **Phase 4** — Custom attention operator exposing explicit JVP/HVP ✅  
+- **Phase 5** — JVP-first attention (forward-mode autodiff) ✅  
+- **Phase 6** — Triton QK scaffold with correctness locks ✅  
+- **Phase 7** — Performance-oriented Triton attention ✅  
+- **Phase 8** — Fully fused SDPA forward (in progress)  
+- **Phase 9** — Explicit Triton backward + JVP/HVP kernels (planned)  
+- **Phase 10** — Meta-learning & theory integration (planned)  
 
 A more detailed and up-to-date breakdown is maintained in `docs/STATUS.md`.
 
@@ -42,6 +44,8 @@ Phase 6 (scaffold): Triton QK forward kernel with Python backward; forward corre
 Phase 7 — Performance-Oriented Triton Attention: enable tensor cores, larger tiles, and partial fusion while preserving correctness via separate “reference” and “fast” backends. Later phases fuse the full SDPA and replace autograd-in-backward with explicit kernels, enabling higher-order meta-learning research.
 
 Phase 8 — Full Fused SDPA Forward: a single Triton kernel for QK → softmax → PV with block-wise stable softmax, forward correctness tests, and first-order gradients via fallback or explicit skip, while preparing minimal intermediates for Phase 9.
+
+Key insight from Phase 8: the autodiff boundary is not the forward kernel, it is the backward. Forward fusion is comparatively easy and performant; backward fusion is where higher-order gradients break in practice. Phase 9 is therefore about reclaiming autodiff structure inside a fused kernel, not just going faster.
 
 ---
 
@@ -64,16 +68,16 @@ Implemented:
 - First-order gradient correctness tests  
 - Numerical and autograd-based HVP/JVP validation  
 - Meta-learning compatibility (MAML-style inner/outer loops)  
-- Clean, reproducible CPU-only environment and packaging  
+- Clean, reproducible environment and packaging  
+- Triton QK scaffolds (reference/fast) and fused forward path (GPU)  
 
 Known limitations:  
-- SDPA math/fused paths are known to fail HVP  
+- Fused Triton backward uses reference fallback (Phase 8)  
 
 Out of scope (for now):  
-- Triton kernels  
-- CUDA-specific optimizations  
-- Backward-backward (full gradgrad) kernels  
-- Performance benchmarking  
+- Fully fused backward kernels  
+- Explicit JVP/HVP kernels in Triton  
+- Performance tuning beyond Phase 8  
 
 ---
 

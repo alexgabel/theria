@@ -9,6 +9,7 @@ autograd correctness while keeping the kernel minimal.
 import torch
 import triton
 import triton.language as tl
+from theria.attention.reference import reference_attention
 
 
 @triton.autotune(
@@ -193,6 +194,7 @@ def triton_qk_softmax(q, k):
     Fused QK + scaling + softmax (tensor-core friendly); PV remains in PyTorch.
     """
     assert q.is_cuda and k.is_cuda
+    assert q.is_contiguous() and k.is_contiguous(), "triton_qk_softmax requires contiguous inputs (v0)"
     B, H, T, D = q.shape
     _, _, M, Dk = k.shape
     assert D == Dk
@@ -207,6 +209,7 @@ def triton_qk_softmax(q, k):
 
     BLOCK_N = 128
     BLOCK_D = 128  # head dim ceiling; mask handles smaller D
+    assert D <= BLOCK_D, f"triton_qk_softmax supports D <= {BLOCK_D}"
     _qk_softmax_kernel[grid](
         q_,
         k_,
@@ -229,6 +232,152 @@ def triton_qk_softmax(q, k):
     )
 
     return probs
+
+
+@triton.jit
+def _fused_sdpa_kernel(
+    Q, K, V, Out, MOut, LOut,
+    Tq, Tk, D, Dv,
+    stride_qbh, stride_qm, stride_qk,
+    stride_kbh, stride_kn, stride_kk,
+    stride_vbh, stride_vn, stride_vk,
+    stride_obh, stride_om, stride_ok,
+    scale,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_D: tl.constexpr, BLOCK_DV: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_m = tl.program_id(1)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_k = tl.arange(0, BLOCK_D)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_dv = tl.arange(0, BLOCK_DV)
+
+    m_i = tl.full((BLOCK_M,), -float("inf"), tl.float32)
+    l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, BLOCK_DV), dtype=tl.float32)
+
+    q_ptrs = Q + pid_bh * stride_qbh + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
+    q = tl.load(q_ptrs, mask=(offs_m[:, None] < Tq) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
+
+    for n0 in range(0, Tk, BLOCK_N):
+        k_ptrs = K + pid_bh * stride_kbh + (n0 + offs_n)[:, None] * stride_kn + offs_k[None, :] * stride_kk
+        v_ptrs = V + pid_bh * stride_vbh + (n0 + offs_n)[:, None] * stride_vn + offs_dv[None, :] * stride_vk
+        k = tl.load(k_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
+        v = tl.load(v_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_dv[None, :] < Dv), other=0.0).to(tl.float32)
+
+        scores = tl.dot(q, tl.trans(k)) * scale  # (BLOCK_M, BLOCK_N)
+
+        m_ij = tl.max(scores, axis=1)
+        m_new = tl.maximum(m_i, m_ij)
+        alpha = tl.exp(m_i - m_new)
+        p = tl.exp(scores - m_new[:, None])
+        l_new = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None] + tl.dot(p, v)
+        m_i = m_new
+        l_i = l_new
+
+    # Normalize (guard against zero)
+    l_i = tl.maximum(l_i, 1e-9)
+    acc = acc / l_i[:, None]
+
+    out_ptrs = Out + pid_bh * stride_obh + offs_m[:, None] * stride_om + offs_dv[None, :] * stride_ok
+    tl.store(out_ptrs, acc, mask=(offs_m[:, None] < Tq) & (offs_dv[None, :] < Dv))
+    m_ptrs = MOut + pid_bh * Tq + offs_m
+    l_ptrs = LOut + pid_bh * Tq + offs_m
+    tl.store(m_ptrs, m_i, mask=offs_m < Tq)
+    tl.store(l_ptrs, l_i, mask=offs_m < Tq)
+
+
+def triton_sdpa_fused(q, k, v, return_stats: bool = False):
+    """
+    Fully fused SDPA forward (QK -> softmax -> PV) in one Triton kernel.
+    Assumptions v0: contiguous tensors, Dv == D, no mask/causal/dropout.
+    """
+    assert q.is_cuda and k.is_cuda and v.is_cuda
+    B, H, T, D = q.shape
+    _, _, M, Dk = k.shape
+    _, _, Mv, Dv = v.shape
+    assert D == Dk
+    assert M == Mv
+    assert Dv == D, "v0 fused path currently requires Dv == D"
+    assert D <= 64 and Dv <= 64, "v0 fused kernel assumes D, Dv <= 64 (BLOCK_D/BLOCK_DV)"
+
+    out = torch.empty((B, H, T, Dv), device=q.device, dtype=torch.float32)
+    m_stats = torch.empty((B, H, T), device=q.device, dtype=torch.float32)
+    l_stats = torch.empty((B, H, T), device=q.device, dtype=torch.float32)
+
+    BLOCK_M = 64
+    BLOCK_N = 64
+    BLOCK_D = 64
+    BLOCK_DV = 64
+    grid = (
+        B * H,
+        triton.cdiv(T, BLOCK_M),
+    )
+
+    q_ = q.reshape(B * H, T, D)
+    k_ = k.reshape(B * H, M, D)
+    v_ = v.reshape(B * H, M, Dv)
+    out_ = out.reshape(B * H, T, Dv)
+
+    _fused_sdpa_kernel[grid](
+        q_,
+        k_,
+        v_,
+        out_, m_stats.reshape(-1), l_stats.reshape(-1),
+        T,
+        M,
+        D,
+        Dv,
+        q_.stride(0),
+        q_.stride(1),
+        q_.stride(2),
+        k_.stride(0),
+        k_.stride(1),
+        k_.stride(2),
+        v_.stride(0),
+        v_.stride(1),
+        v_.stride(2),
+        out_.stride(0),
+        out_.stride(1),
+        out_.stride(2),
+        scale=1.0 / (D ** 0.5),
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_D=BLOCK_D,
+        BLOCK_DV=BLOCK_DV,
+    )
+
+    if return_stats:
+        return out, m_stats, l_stats
+    return out
+
+
+class TritonFusedSDPAFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v):
+        out = triton_sdpa_fused(q, k, v, return_stats=False)
+        ctx.save_for_backward(q, k, v)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v = ctx.saved_tensors
+        # NOTE: backward intentionally falls back to reference attention.
+        # Phase 8 validates forward fusion only.
+        # Phase 9 replaces this with explicit Triton backward + JVP/HVP.
+        q_req = q.detach().requires_grad_(True)
+        k_req = k.detach().requires_grad_(True)
+        v_req = v.detach().requires_grad_(True)
+        with torch.enable_grad():
+            out_ref = reference_attention(q_req, k_req, v_req)
+        grads = torch.autograd.grad(out_ref, (q_req, k_req, v_req), grad_out, retain_graph=False, create_graph=False)
+        return grads
+
+
+def triton_sdpa_fused_autograd(q, k, v):
+    return TritonFusedSDPAFunction.apply(q, k, v)
 
 
 @triton.autotune(
