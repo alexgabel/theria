@@ -47,11 +47,11 @@ def sdpa_custom(q, k, v, *, backend: str = "reference"):
         v_cast = v.to(probs.dtype)
         out = torch.matmul(probs, v_cast)
         return out.to(q.dtype)
-    if backend == "triton_full_fused":
+    if backend in ("triton_full_fused", "triton_full_fused_phase8"):
         assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous(), "triton_full_fused requires contiguous inputs"
         assert q.shape[-1] == v.shape[-1], "triton_full_fused requires Dv == D"
         assert q.shape[-1] <= 64, "triton_full_fused v0 supports D <= 64 only"
-        # Fully fused SDPA forward in Triton; PV fused. Backward falls back to reference.
+        # Phase 8 forward-only fused kernel; keep output stable through Phase 9.
         out = triton_sdpa_fused_autograd(q, k, v)
         return out.to(q.dtype)
     raise ValueError(f"Unsupported sdpa_custom backend: {backend}")

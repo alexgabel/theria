@@ -102,6 +102,14 @@ Tests/coverage:
 Documentation to add:
 - docs/phase9_backward.md and docs/phase9_jvp.md describing saved data, recomputation, stability, and failure modes if assumptions are broken.
 
+Golden CI / sanity commands:
+- pytest -q
+- pytest -m gpu -q
+- CUDA_VISIBLE_DEVICES=0 python scripts/bench_sdpa.py --preset medium --dtype float16
+
+Exit condition (Phase 9 safety):
+- backend="triton_full_fused_phase8" stays forward-identical to Phase 8 output until explicit backward is correct.
+
 Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
 Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
 
