@@ -68,6 +68,19 @@ Phase 8 (in progress):
 - Document what is supported and what is not
 - Fused v0 contract (forward-only): contiguous Q,K,V shaped (B,H,T,D)/(B,H,M,D)/(B,H,M,Dv) with Dv=D, no mask/causal/dropout, fp16/bf16 inputs, fp32 accumulation, output cast to input dtype; supported head dims initially in {32, 64, 128}.
 
+## Phase 8 — Fused SDPA Forward (COMPLETE)
+
+- Implemented single-kernel Triton SDPA (QK → softmax → PV)
+- Numerically stable online softmax (m, l) with edge-case handling
+- Forward matches reference within fp16 tolerance
+- Performance competitive with PyTorch SDPA reference
+- Backward intentionally falls back to reference (Phase 9 target)
+
+Limitations:
+- Dv == D
+- D ≤ 64
+- No mask / causal / dropout
+
 Phase 9 (planned): Explicit Triton backward + JVP/HVP kernels (remove autograd-in-backward).
 Phase 10 (planned): Meta-learning integration and higher-order research evaluation.
 
