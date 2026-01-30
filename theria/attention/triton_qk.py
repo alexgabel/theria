@@ -162,6 +162,8 @@ def _qk_softmax_kernel(
         q_vec = q_vec[None, :].to(tl.float32)
         k_block = k_block.to(tl.float32)
         scores = tl.sum(k_block * q_vec, axis=1) * scale
+        valid_n = (n0 + offs_n) < Tk
+        scores = tl.where(valid_n, scores, -float("inf"))
         max_val = tl.maximum(max_val, tl.max(scores, axis=0))
 
     # Second pass: compute exp and sum
@@ -173,6 +175,8 @@ def _qk_softmax_kernel(
         q_vec = q_vec[None, :].to(tl.float32)
         k_block = k_block.to(tl.float32)
         scores = tl.sum(k_block * q_vec, axis=1) * scale
+        valid_n = (n0 + offs_n) < Tk
+        scores = tl.where(valid_n, scores, -float("inf"))
         scores = scores - max_val
         exp_scores = tl.exp(scores)
         sum_exp += tl.sum(exp_scores, axis=0)
@@ -259,6 +263,7 @@ def _fused_sdpa_kernel(
 
     q_ptrs = Q + pid_bh * stride_qbh + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     q = tl.load(q_ptrs, mask=(offs_m[:, None] < Tq) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
+    valid_m = offs_m < Tq
 
     for n0 in range(0, Tk, BLOCK_N):
         k_ptrs = K + pid_bh * stride_kbh + (n0 + offs_n)[:, None] * stride_kn + offs_k[None, :] * stride_kk
@@ -267,9 +272,13 @@ def _fused_sdpa_kernel(
         v = tl.load(v_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_dv[None, :] < Dv), other=0.0).to(tl.float32)
 
         scores = tl.dot(q, tl.trans(k)) * scale  # (BLOCK_M, BLOCK_N)
+        valid_n = (n0 + offs_n) < Tk
+        mask_mn = valid_m[:, None] & valid_n[None, :]
+        scores = tl.where(mask_mn, scores, -float("inf"))
 
         m_ij = tl.max(scores, axis=1)
         m_new = tl.maximum(m_i, m_ij)
+        m_new = tl.where(valid_m, m_new, 0.0)
         alpha = tl.exp(m_i - m_new)
         p = tl.exp(scores - m_new[:, None])
         l_new = l_i * alpha + tl.sum(p, axis=1)
@@ -278,8 +287,10 @@ def _fused_sdpa_kernel(
         l_i = l_new
 
     # Normalize (guard against zero)
-    l_i = tl.maximum(l_i, 1e-9)
-    acc = acc / l_i[:, None]
+    eps = 1e-6
+    l_safe = tl.maximum(l_i, eps)
+    acc = acc / l_safe[:, None]
+    acc = tl.where(valid_m[:, None], acc, 0.0)
 
     out_ptrs = Out + pid_bh * stride_obh + offs_m[:, None] * stride_om + offs_dv[None, :] * stride_ok
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < Tq) & (offs_dv[None, :] < Dv))
