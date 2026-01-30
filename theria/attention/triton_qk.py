@@ -10,6 +10,7 @@ import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
+from theria.attention.triton_sdpa_backward import sdpa_bwd_dv
 
 
 @triton.autotune(
@@ -279,7 +280,8 @@ def _fused_sdpa_kernel(
 
         m_ij = tl.max(scores, axis=1)
         m_new = tl.maximum(m_i, m_ij)
-        m_new = tl.where(valid_m, m_new, 0.0)
+        valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
+        m_new = tl.where(valid_m_slice, m_new, 0.0)
         alpha = tl.exp(m_i - m_new)
         p = tl.exp(scores - m_new[:, None])
         l_new = l_i * alpha + tl.sum(p, axis=1)
@@ -291,7 +293,8 @@ def _fused_sdpa_kernel(
     eps = 1e-6
     l_safe = tl.maximum(l_i, eps)
     acc = acc / l_safe[:, None]
-    acc = tl.where(valid_m[:, None], acc, 0.0)
+    valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
+    acc = tl.where(valid_m_slice[:, None], acc, 0.0)
 
     out_ptrs = Out + pid_bh * stride_obh + offs_m[:, None] * stride_om + offs_dv[None, :] * stride_ok
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < Tq) & (offs_dv[None, :] < Dv))
