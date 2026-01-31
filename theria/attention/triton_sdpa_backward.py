@@ -58,8 +58,6 @@ def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
     # Feature limits
     if D > 64:
         raise AssertionError("Phase9 v0 supports D<=64")
-    if require_v and v.shape[-1] != D:
-        raise AssertionError("v0 assumes Dv == D")
 
     # No mask/dropout/causal supported in v0; enforced by API (no args)
 
@@ -470,7 +468,7 @@ def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     linearizes the map (q,k,v) -> P(q,k; m,l) @ v with P rebuilt from saved
     stats. Do not compare directly to autograd.functional.jvp(triton_sdpa_fused).
 
-    No autograd inside; works on CPU or CUDA. Accumulates in fp32.
+    No autograd inside; CUDA-only in Phase 9. Accumulates in fp32.
 
     Args:
         q,k,v: (B,H,T,D) / (B,H,M,D)
