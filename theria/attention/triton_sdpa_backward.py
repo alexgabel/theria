@@ -1,6 +1,8 @@
 """
 Triton backward kernels for fused SDPA (Phase 9 scaffolding).
 
+Phase 9 is frozen; Phase 10 may only apply bugfixes here.
+
 This file currently implements sdpa_bwd_dv: dV = P^T @ dO
 where P is reconstructed blockwise using saved row-wise m and l.
 
