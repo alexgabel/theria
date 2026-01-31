@@ -386,8 +386,47 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale):
     return dk
 
 
-__all__ = ["sdpa_bwd_dv", "sdpa_bwd_dq", "sdpa_bwd_dk"]
+__all__ = ["sdpa_bwd_dv", "sdpa_bwd_dq", "sdpa_bwd_dk", "sdpa_jvp"]
 
+
+def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
+    """
+    Explicit JVP for SDPA using saved forward row stats (m, l).
+    No autograd, works on CPU or CUDA. Accumulates in fp32.
+
+    Args:
+        q,k,v: (B,H,T,D) / (B,H,M,D)
+        dq,dk,dv: same shapes as q,k,v (tangents)
+        m,l: (B,H,T) forward row-wise max and sumexp
+        scale: 1/sqrt(D)
+    Returns:
+        dO with shape (B,H,T,D) in q.dtype
+    """
+    # shape checks
+    B, H, T, D = q.shape
+    assert k.shape == (B, H, k.shape[2], D)
+    assert v.shape[0] == B and v.shape[1] == H and v.shape[3] == D
+    assert dq.shape == q.shape and dk.shape == k.shape and dv.shape == v.shape
+    assert m.shape == (B, H, T) and l.shape == (B, H, T)
+
+    # fp32 compute
+    qf = q.float()
+    kf = k.float()
+    vf = v.float()
+    dqf = dq.float()
+    dkf = dk.float()
+    dvf = dv.float()
+
+    scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale  # (B,H,T,M)
+    # reconstruct P from saved stats
+    P = torch.exp(scores - m.unsqueeze(-1)) / l.unsqueeze(-1)
+
+    dS = (torch.matmul(dqf, kf.transpose(-2, -1)) + torch.matmul(qf, dkf.transpose(-2, -1))) * scale
+    dS_centered = dS - (dS * P).sum(dim=-1, keepdim=True)
+    dP = P * dS_centered
+
+    dO = torch.matmul(dP, vf) + torch.matmul(P, dvf)
+    return dO.to(q.dtype)
 
 @triton.jit
 def _sdpa_bwd_dq_kernel(
