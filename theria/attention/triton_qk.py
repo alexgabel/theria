@@ -10,7 +10,7 @@ import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
-from theria.attention.triton_sdpa_backward import sdpa_bwd_dv
+from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa_bwd_dk
 
 
 @triton.autotune(
@@ -372,23 +372,19 @@ def triton_sdpa_fused(q, k, v, return_stats: bool = False):
 class TritonFusedSDPAFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v):
-        out = triton_sdpa_fused(q, k, v, return_stats=False)
-        ctx.save_for_backward(q, k, v)
+        out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.save_for_backward(q, k, v, m, l)
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
-        q, k, v = ctx.saved_tensors
-        # NOTE: backward intentionally falls back to reference attention.
-        # Phase 8 validates forward fusion only.
-        # Phase 9 replaces this with explicit Triton backward + JVP/HVP.
-        q_req = q.detach().requires_grad_(True)
-        k_req = k.detach().requires_grad_(True)
-        v_req = v.detach().requires_grad_(True)
-        with torch.enable_grad():
-            out_ref = reference_attention(q_req, k_req, v_req)
-        grads = torch.autograd.grad(out_ref, (q_req, k_req, v_req), grad_out, retain_graph=False, create_graph=False)
-        return grads
+        q, k, v, m, l = ctx.saved_tensors
+        scale = 1.0 / (q.shape[-1] ** 0.5)
+        # Triton backward (Phase 9): explicit dQ/dK/dV, no autograd fallback.
+        dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale)
+        dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale)
+        dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+        return dq, dk, dv
 
 
 def triton_sdpa_fused_autograd(q, k, v):

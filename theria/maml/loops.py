@@ -13,7 +13,7 @@ This module is correctness-first and intentionally unoptimized.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Mapping
+from typing import Mapping, OrderedDict as TypedOrderedDict
 
 import torch
 import torch.nn as nn
@@ -23,8 +23,8 @@ from torch.func import functional_call
 from theria.tasks.synthetic_seqcls import TaskBatch
 
 
-Params = OrderedDict[str, torch.Tensor]
-Buffers = OrderedDict[str, torch.Tensor]
+Params = TypedOrderedDict[str, torch.Tensor]
+Buffers = TypedOrderedDict[str, torch.Tensor]
 
 
 def named_params(model: nn.Module) -> Params:
