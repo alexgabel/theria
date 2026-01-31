@@ -15,6 +15,46 @@ import triton
 import triton.language as tl
 
 
+_ALLOWED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
+
+
+def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
+    """Guardrails for Phase 9 backward/JVP.
+
+    Raises loudly instead of silently falling back.
+    """
+    # Device / dtype
+    if not (q.is_cuda and k.is_cuda and (not require_v or v.is_cuda) and dout.is_cuda):
+        raise AssertionError("Phase9 backward requires CUDA tensors")
+    for name, t in ("q", q), ("k", k), ("v", v if require_v else q), ("dout", dout):
+        if t.dtype not in _ALLOWED_DTYPES:
+            raise AssertionError(f"Unsupported dtype for {name}: {t.dtype}")
+        if not t.is_contiguous():
+            raise AssertionError(f"{name} must be contiguous for Phase9 backward")
+
+    # Shapes
+    B, H, T, D = q.shape
+    if k.shape != (B, H, k.shape[2], D):
+        raise AssertionError("k last dim must equal q last dim; shapes must align (B,H,M,D)")
+    if dout.shape != (B, H, T, D):
+        raise AssertionError("dout shape must be (B,H,T,D)")
+    if require_v:
+        if v.shape != (B, H, k.shape[2], D):
+            raise AssertionError("v shape must be (B,H,M,D)")
+
+    # Stats
+    if m.shape != (B, H, T) or l.shape != (B, H, T):
+        raise AssertionError("m,l must be saved forward stats with shape (B,H,T)")
+
+    # Feature limits
+    if D > 64:
+        raise AssertionError("Phase9 v0 supports D<=64")
+    if require_v and v.shape[-1] != D:
+        raise AssertionError("v0 assumes Dv == D")
+
+    # No mask/dropout/causal supported in v0; enforced by API (no args)
+
+
 @triton.jit
 def _sdpa_bwd_dv_kernel(
     Q, K, DO, DV, M, L,
@@ -117,15 +157,13 @@ def sdpa_bwd_dv(q, k, dout, m, l, scale):
     Returns:
         dv with shape (B,H,M,Dv), same dtype as inputs.
     """
-    assert q.is_cuda and k.is_cuda and dout.is_cuda
+    _assert_backward_contract(q, k, q, dout, m, l, require_v=False)
     B, H, T, D = q.shape
     _, _, M, Dk = k.shape
     _, _, Tdo, Dv = dout.shape
     assert D == Dk
     assert T == Tdo
     assert D == Dv, "v0 assumes Dv == D"
-    assert q.is_contiguous() and k.is_contiguous() and dout.is_contiguous()
-    assert m.shape == (B, H, T) and l.shape == (B, H, T)
 
     dv = torch.empty((B, H, M, Dv), device=q.device, dtype=q.dtype)
 
@@ -321,14 +359,9 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale):
     """
     Compute dK for SDPA using saved (m, l). Dv == D assumed.
     """
-    assert q.is_cuda and k.is_cuda and v.is_cuda and dout.is_cuda
+    _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
     B, H, T, D = q.shape
-    _, _, M, Dk = k.shape
-    assert D == Dk
-    assert v.shape == (B, H, M, D)
-    assert dout.shape == (B, H, T, D)
-    assert m.shape == (B, H, T) and l.shape == (B, H, T)
-    assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous() and dout.is_contiguous()
+    M = k.shape[2]
     dk = torch.empty_like(k)
 
     q_ = q.reshape(B * H, T, D)
@@ -386,13 +419,23 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale):
     return dk
 
 
-__all__ = ["sdpa_bwd_dv", "sdpa_bwd_dq", "sdpa_bwd_dk", "sdpa_jvp"]
+__all__ = [
+    "sdpa_bwd_dq",
+    "sdpa_bwd_dk",
+    "sdpa_bwd_dv",
+    "sdpa_jvp",
+]
 
 
 def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     """
-    Explicit JVP for SDPA using saved forward row stats (m, l).
-    No autograd, works on CPU or CUDA. Accumulates in fp32.
+    Explicit JVP for the **frozen-stats** SDPA operator using saved (m, l).
+
+    Important: this is *not* the JVP of the full recomputed softmax; it
+    linearizes the map (q,k,v) -> P(q,k; m,l) @ v with P rebuilt from saved
+    stats. Do not compare directly to autograd.functional.jvp(triton_sdpa_fused).
+
+    No autograd inside; works on CPU or CUDA. Accumulates in fp32.
 
     Args:
         q,k,v: (B,H,T,D) / (B,H,M,D)
@@ -563,13 +606,9 @@ def sdpa_bwd_dq(q, k, v, dout, m, l, scale):
     """
     Compute dQ for SDPA using saved (m, l). Dv == D assumed.
     """
-    assert q.is_cuda and k.is_cuda and v.is_cuda and dout.is_cuda
+    _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
     B, H, T, D = q.shape
-    _, _, M, Dk = k.shape
-    assert D == Dk
-    assert dout.shape == (B, H, T, D)
-    assert m.shape == (B, H, T) and l.shape == (B, H, T)
-    assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous() and dout.is_contiguous()
+    M = k.shape[2]
     dq = torch.empty_like(q)
 
     q_ = q.reshape(B * H, T, D)

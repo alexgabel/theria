@@ -10,6 +10,7 @@ def _l2_normalize(t):
 
 
 @pytest.mark.gpu
+@pytest.mark.phase9
 @pytest.mark.parametrize(
     "shape",
     [

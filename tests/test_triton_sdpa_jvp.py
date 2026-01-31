@@ -6,6 +6,7 @@ from theria.attention.triton_sdpa_backward import sdpa_jvp
 
 
 @pytest.mark.gpu
+@pytest.mark.phase9
 @pytest.mark.parametrize(
     "shape",
     [

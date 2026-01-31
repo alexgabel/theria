@@ -26,6 +26,12 @@ def test_triton_fused_backward_matches_reference_cuda():
         loss_fused = loss_fn("triton_full_fused")
         grads_fused = torch.autograd.grad(loss_fused, (q, k, v), retain_graph=True, create_graph=False)
 
+        # Assert no fallback: backend must be fused and use explicit Triton backward.
+        # If the implementation exposes a backend attribute, verify it; otherwise
+        # this test will fail only on value mismatch below.
+        if hasattr(sdpa_custom, "backend"):
+            assert sdpa_custom.backend == "triton_full_fused"
+
         for g_fused, g_ref in zip(grads_fused, grads_ref):
             torch.testing.assert_close(g_fused, g_ref, rtol=2e-2, atol=2e-2)
     finally:
