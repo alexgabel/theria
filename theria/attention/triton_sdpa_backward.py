@@ -24,9 +24,18 @@ def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
     Raises loudly instead of silently falling back.
     """
     # Device / dtype
-    if not (q.is_cuda and k.is_cuda and (not require_v or v.is_cuda) and dout.is_cuda):
+    if not (q.is_cuda and k.is_cuda and dout.is_cuda and (not require_v or (v is not None and v.is_cuda))):
         raise AssertionError("Phase9 backward requires CUDA tensors")
-    for name, t in ("q", q), ("k", k), ("v", v if require_v else q), ("dout", dout):
+    dtype_check = (
+        ("q", q),
+        ("k", k),
+        ("v", v) if require_v else (),
+        ("dout", dout),
+    )
+    for item in dtype_check:
+        if not item:
+            continue
+        name, t = item
         if t.dtype not in _ALLOWED_DTYPES:
             raise AssertionError(f"Unsupported dtype for {name}: {t.dtype}")
         if not t.is_contiguous():
@@ -34,13 +43,13 @@ def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
 
     # Shapes
     B, H, T, D = q.shape
-    if k.shape != (B, H, k.shape[2], D):
-        raise AssertionError("k last dim must equal q last dim; shapes must align (B,H,M,D)")
+    if k.ndim != 4 or k.shape[0] != B or k.shape[1] != H or k.shape[3] != D:
+        raise AssertionError("k must have shape (B,H,M,D) with D matching q")
     if dout.shape != (B, H, T, D):
         raise AssertionError("dout shape must be (B,H,T,D)")
     if require_v:
-        if v.shape != (B, H, k.shape[2], D):
-            raise AssertionError("v shape must be (B,H,M,D)")
+        if v is None or v.ndim != 4 or v.shape[0] != B or v.shape[1] != H or v.shape[3] != D:
+            raise AssertionError("v must have shape (B,H,M,D) with D matching q")
 
     # Stats
     if m.shape != (B, H, T) or l.shape != (B, H, T):
@@ -53,6 +62,45 @@ def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
         raise AssertionError("v0 assumes Dv == D")
 
     # No mask/dropout/causal supported in v0; enforced by API (no args)
+
+
+def _assert_jvp_contract(q, k, v, dq, dk, dv, m, l):
+    """Guardrails for Phase 9 JVP (frozen-stats operator)."""
+    # Device / dtype
+    tensors = (
+        ("q", q),
+        ("k", k),
+        ("v", v),
+        ("dq", dq),
+        ("dk", dk),
+        ("dv", dv),
+    )
+    for name, t in tensors:
+        if not t.is_cuda:
+            raise AssertionError("Phase9 JVP requires CUDA tensors")
+        if t.dtype not in _ALLOWED_DTYPES:
+            raise AssertionError(f"Unsupported dtype for {name}: {t.dtype}")
+        if not t.is_contiguous():
+            raise AssertionError(f"{name} must be contiguous for Phase9 JVP")
+
+    # Shapes
+    B, H, T, D = q.shape
+    if k.ndim != 4 or k.shape[0] != B or k.shape[1] != H or k.shape[3] != D:
+        raise AssertionError("k must have shape (B,H,M,D) with D matching q")
+    if v.ndim != 4 or v.shape[0] != B or v.shape[1] != H or v.shape[3] != D:
+        raise AssertionError("v must have shape (B,H,M,D) with D matching q")
+    if dq.shape != q.shape or dk.shape != k.shape or dv.shape != v.shape:
+        raise AssertionError("dq, dk, dv must match q, k, v shapes respectively")
+    if m.shape != (B, H, T) or l.shape != (B, H, T):
+        raise AssertionError("m,l must be saved forward stats with shape (B,H,T)")
+
+    # Feature limits
+    if D > 64:
+        raise AssertionError("Phase9 v0 supports D<=64")
+
+    # Stats sanity
+    if torch.any(l <= 0):
+        raise AssertionError("Phase9 JVP requires l > 0 (forward sumexp stats)")
 
 
 @triton.jit
@@ -99,7 +147,6 @@ def _sdpa_bwd_dv_kernel(
             mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
             other=0.0,
         ).to(tl.float32)
-        valid_m = (m0 + offs_m) < Tq
 
         # Load k_block for this key tile: (BLOCK_N, D)
         k_ptrs = K + pid_bh * stride_kbh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
@@ -157,7 +204,7 @@ def sdpa_bwd_dv(q, k, dout, m, l, scale):
     Returns:
         dv with shape (B,H,M,Dv), same dtype as inputs.
     """
-    _assert_backward_contract(q, k, q, dout, m, l, require_v=False)
+    _assert_backward_contract(q, k, None, dout, m, l, require_v=False)
     B, H, T, D = q.shape
     _, _, M, Dk = k.shape
     _, _, Tdo, Dv = dout.shape
@@ -219,9 +266,6 @@ def sdpa_bwd_dv(q, k, dout, m, l, scale):
     return dv
 
 
-__all__ = ["sdpa_bwd_dv"]
-
-
 @triton.jit
 def _sdpa_bwd_dk_kernel(
     Q, K, V, DO, DK, M, L,
@@ -264,7 +308,6 @@ def _sdpa_bwd_dk_kernel(
             mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
             other=0.0,
         ).to(tl.float32)
-        valid_m = (m0 + offs_m) < Tq
 
         # pass 1: compute z for these query rows (over all key blocks)
         z_acc = tl.zeros((BLOCK_M,), dtype=tl.float32)
@@ -419,14 +462,6 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale):
     return dk
 
 
-__all__ = [
-    "sdpa_bwd_dq",
-    "sdpa_bwd_dk",
-    "sdpa_bwd_dv",
-    "sdpa_jvp",
-]
-
-
 def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     """
     Explicit JVP for the **frozen-stats** SDPA operator using saved (m, l).
@@ -445,12 +480,8 @@ def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     Returns:
         dO with shape (B,H,T,D) in q.dtype
     """
-    # shape checks
+    _assert_jvp_contract(q, k, v, dq, dk, dv, m, l)
     B, H, T, D = q.shape
-    assert k.shape == (B, H, k.shape[2], D)
-    assert v.shape[0] == B and v.shape[1] == H and v.shape[3] == D
-    assert dq.shape == q.shape and dk.shape == k.shape and dv.shape == v.shape
-    assert m.shape == (B, H, T) and l.shape == (B, H, T)
 
     # fp32 compute
     qf = q.float()
@@ -508,7 +539,6 @@ def _sdpa_bwd_dq_kernel(
         mask=(offs_m < Tq) & (offs_d[None, :] < D),
         other=0.0,
     ).to(tl.float32)
-    valid_m = offs_m < Tq
 
     # Pass 1: accumulate z
     z_acc = tl.zeros((BLOCK_M,), dtype=tl.float32)
@@ -664,3 +694,11 @@ def sdpa_bwd_dq(q, k, v, dout, m, l, scale):
     )
 
     return dq
+
+
+__all__ = [
+    "sdpa_bwd_dq",
+    "sdpa_bwd_dk",
+    "sdpa_bwd_dv",
+    "sdpa_jvp",
+]

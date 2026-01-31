@@ -15,6 +15,7 @@ Let \(O = P V\) and incoming gradient \(G = dO\).
 - \(\mathrm{dP} = G V^T\).
 - Row-wise \(z_i = \sum_j \mathrm{dP}_{ij} P_{ij}\).
 - \(\mathrm{dS} = P \odot (\mathrm{dP} - z)\).
+- (Centering is applied to \(\mathrm{dP}\) via \(z\); \(\mathrm{dS}\) is derived from that centered \(\mathrm{dP}\).)
 - \(\mathrm{dQ} = (\mathrm{dS} K) \cdot \text{scale}\).
 - \(\mathrm{dK} = (\mathrm{dS}^T Q) \cdot \text{scale}\).
 
