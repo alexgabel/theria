@@ -1,60 +1,78 @@
 # theria
 
-theria is a research toolkit for **higher-order learning with modern neural operators**. It focuses on making differentiable operators—starting with scaled dot-product attention—*correctly* compatible with meta-learning, implicit differentiation, and higher-order optimization, while progressively reintroducing kernel-level performance.
+**theria** is a research library for **higher-order learning with modern neural operators**, with a focus on **scaled dot-product attention (SDPA)** and its interaction with **meta-learning (MAML)**, implicit differentiation, and higher-order optimization.
 
-The project is explicitly **correctness-first**: mathematical contracts and higher-order differentiation semantics are established before performance work, and preserved as kernels evolve.
+The core goal is **correctness first**:
+> establish mathematically sound differentiation contracts *before* kernel fusion and performance optimization.
+
+Phase 10 marks the transition from kernel construction to **scientific experiments**: using the validated operators to study where and why meta-learning succeeds or fails.
 
 ---
 
-## Motivation
+## Why theria exists
 
-Many modern learning setups (e.g. MAML, implicit layers, bilevel optimization) rely on higher-order derivatives such as Hessian–vector products (HVPs) or Jacobian–vector products (JVPs). However, common fused or highly optimized operators (e.g. FlashAttention) often do **not** support higher-order differentiation correctly or at all.
+Many highly optimized attention implementations (e.g. FlashAttention / fused SDPA) break or silently approximate higher-order derivatives.
+
+This matters for:
+- MAML / bilevel optimization
+- implicit layers
+- second-order methods
+- operator-learning research
 
 theria explores how to:
-- Define clear operator-level differentiation contracts
-- Validate first- and higher-order gradients rigorously
-- Enable meta-learning with modern neural operators
-- Later, reintroduce performance via Triton/CUDA without breaking correctness
+- define **explicit operator-level differentiation contracts**
+- validate **JVP / VJP / HVP** rigorously
+- integrate **modern kernels (Triton)** *without losing higher-order correctness*
+- characterize the **autograd boundary** in fused operators
 
 ---
 
-## Project status
+## Project status (TL;DR)
 
-Current work is tracked in `docs/STATUS.md`. That file is the single source of truth for:
-- active phase and exit criteria
-- kernel contracts and limitations
-- golden CI/benchmark commands
-- known limitations and boundary tests
+- **Phase 9: COMPLETE**
+  - Explicit Triton backward (dQ, dK, dV)
+  - Frozen-stats JVP
+  - HVP sanity via finite differences
+  - GPU correctness locked by tests
+- **Phase 10: IN PROGRESS**
+  - Meta-learning (MAML) experiments
+  - Empirical study of higher-order failure modes
+  - Comparison: full MAML vs FO-MAML under different attention backends
 
-If you are new to the repo, start with:
-- `docs/STATUS.md`
-- `docs/theory/attention_autograd.md`
-- `docs/design/operator_contracts.md`
-
----
-
-## Phase 2 Results (Closed)
-
-- Full MAML with attention on CPU  
-- Explicit HVP validated by finite differences  
-- FO-MAML vs full MAML distinction locked by tests  
-- Documented SDPA higher-order autograd failure  
+👉 **Canonical status & exit criteria:** `docs/STATUS.md`
 
 ---
 
-## Current scope (high level)
+## Repository layout (important parts only)
 
-Implemented:
-- Reference SDPA and operator-level contracts
-- Explicit HVP/JVP for attention (analytic, validated)
-- Boundary tests that lock known failures
-- Triton forward paths (QK scaffold, partial fusion, and fully fused forward)
-- Benchmarks and phase-specific tests
+```text
+theria/                     # Stable library code (do not experiment here)
+  attention/                # SDPA operators, Triton kernels, JVP/HVP logic
+  maml/                     # Backend-agnostic MAML inner/outer loops
+  autograd/                 # Custom autograd.Function wiring
+  models/                   # Tiny attention models for tests/experiments
+  tasks/                    # Synthetic tasks (e.g. seq classification)
 
-Known limitations:
-- Fully fused backward is not yet implemented
-- JVP/HVP in Triton kernels is not yet implemented
+experiments/phase10/        # ALL Phase 10 work lives here
+  configs/                  # Experiment configs
+  scripts/                  # Runnable experiment entry points
+  notebooks/                # Scratch / analysis (optional)
+  runs/                     # Outputs (gitignored)
 
+scripts/
+  bench_sdpa.py              # Performance sanity checks
+  smoke_sdpa.py              # Minimal forward/backward smoke test
+
+docs/
+  STATUS.md                  # Phase tracker (single source of truth)
+  phase9_*.md                # Backward / JVP / HVP contracts
+  design/                    # Operator contracts
+  theory/                    # Autograd + MAML derivations
+
+tests/
+  test_maml_*.py             # Phase 10 MAML correctness tests
+  test_triton_*              # Kernel & higher-order validation
+```
 ---
 
 ## Design philosophy
