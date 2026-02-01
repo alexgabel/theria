@@ -98,6 +98,7 @@ def run_experiment(
     seed: int,
     steps: int,
     inner_steps: int,
+    inner_lr: float | None,
 ):
     torch.manual_seed(seed)
 
@@ -114,6 +115,7 @@ def run_experiment(
             tasks=[task],
             fo=fo,
             inner_steps=inner_steps,
+            inner_lr=inner_lr if inner_lr is not None else None,
         )
 
         outer_loss.backward()
@@ -140,6 +142,12 @@ def main():
                         help="Use first-order MAML (FO-MAML)")
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--inner-steps", type=int, default=1)
+    parser.add_argument(
+        "--inner-lr",
+        type=float,
+        default=None,
+        help="Inner-loop learning rate (overrides default)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda")
 
@@ -153,6 +161,7 @@ def main():
         seed=args.seed,
         steps=args.steps,
         inner_steps=args.inner_steps,
+        inner_lr=args.inner_lr,
     )
 
 
