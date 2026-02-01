@@ -6,7 +6,7 @@ Used as a math reference for testing Triton JVP / composed kernels.
 
 import torch
 
-from theria.attention.reference import reference_attention
+from theria.attention.reference_attention import reference_attention
 
 
 def softmax_jvp(scores: torch.Tensor, dscores: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
@@ -44,4 +44,7 @@ def sdpa_jvp_reference(q, k, v, dq, dk, dv, scale):
     return dO.to(q.dtype)
 
 
+sdpa_jvp = sdpa_jvp_reference
+
+__all__ = ["sdpa_jvp_reference", "sdpa_jvp"]
 __all__ = ["sdpa_jvp_reference"]

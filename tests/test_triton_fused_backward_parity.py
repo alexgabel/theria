@@ -3,7 +3,7 @@ import torch
 
 from theria.attention.custom import sdpa_custom
 from theria.attention.reference import reference_attention
-from theria.attention.reference_backward import sdpa_backward_reference
+from theria.attention.reference_backward_sdpa import sdpa_backward_reference
 
 
 class RefSDPAExplicit(torch.autograd.Function):

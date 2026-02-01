@@ -95,3 +95,9 @@ def sdpa_hvp(q, k, v, vq, vk, vv):
     hvp_v = probs_dir.sum(dim=-2).unsqueeze(-1).expand_as(v)
 
     return hvp_q, hvp_k, hvp_v
+
+
+# Backward-compatible alias + export list
+sdpa_hvp_reference = sdpa_hvp
+
+__all__ = ["sdpa_hvp", "sdpa_hvp_reference", "sdpa_jvp"]

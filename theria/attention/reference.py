@@ -1,24 +1,24 @@
-# theria/attention/reference.py
-# NOTE: This implementation is for correctness and higher-order autodiff only.
-# It is intentionally slow and unfused.
-# TODO(phase5): remove sdpa_reference alias once sdpa_function is fully migrated
+"""
+Legacy compatibility shim for Phase 9 reference helpers.
 
-import torch
-import math
+The new reference implementations live in:
+  - reference_attention.py
+  - reference_backward_sdpa.py
+  - reference_jvp_sdpa.py
+  - reference_hvp_sdpa.py
 
-def reference_attention(q, k, v):
-    """
-    Reference scaled dot-product attention.
-    q: (B, H, N, D)
-    k: (B, H, M, D)
-    v: (B, H, M, Dv)
-    """
-    d = q.shape[-1]
-    scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d)
-    probs = torch.softmax(scores, dim=-1)
-    return torch.matmul(probs, v)
+This module re-exports them so older imports keep working.
+"""
 
+from .reference_attention import reference_attention, sdpa_reference
+from .reference_backward_sdpa import sdpa_backward_reference
+from .reference_jvp_sdpa import sdpa_jvp_reference
+from .reference_hvp_sdpa import sdpa_hvp_reference
 
-# --- Backwards-compatible alias (legacy import path) ---
-# NOTE: Keep this alias until sdpa_function.py is migrated.
-sdpa_reference = reference_attention
+__all__ = [
+    "reference_attention",
+    "sdpa_reference",
+    "sdpa_backward_reference",
+    "sdpa_jvp_reference",
+    "sdpa_hvp_reference",
+]

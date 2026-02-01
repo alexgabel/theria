@@ -8,7 +8,7 @@ import torch
 
 from tests._graph_inspect import can_double_backward
 from theria.attention.custom import sdpa_custom
-from theria.attention.reference_hvp import sdpa_jvp
+from theria.attention.reference_hvp_sdpa import sdpa_jvp
 
 
 def _make_qkv(device, dtype, B=1, H=1, T=4, D=8):

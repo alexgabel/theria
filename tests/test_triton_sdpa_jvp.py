@@ -3,6 +3,7 @@ import torch
 
 from theria.attention.custom import sdpa_custom
 from theria.attention.triton_sdpa_backward import sdpa_jvp
+from theria.attention.reference_jvp_sdpa import sdpa_jvp_reference
 
 
 @pytest.mark.gpu
@@ -38,8 +39,6 @@ def test_triton_sdpa_jvp_matches_reference(shape):
     l = torch.exp(scores - m.unsqueeze(-1)).sum(dim=-1)
 
     # Reference JVP with *frozen* stats to match sdpa_jvp definition
-    from theria.attention.reference_jvp import sdpa_jvp_reference
-
     out_jvp_ref = sdpa_jvp_reference(q, k, v, dq, dk, dv, scale)
 
     # Our explicit JVP (no autograd in implementation)

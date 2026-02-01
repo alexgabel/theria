@@ -98,7 +98,7 @@ requiring a fully differentiable backward pass.
 ### Attention HVP Decomposition
 
 Explicit Hessian–vector products with respect to $Q$, $K$, and $V$—
-denoted HVP\_Q, HVP\_K, and HVP\_V—are now implemented in `reference_hvp.py`
+denoted HVP\_Q, HVP\_K, and HVP\_V—are now implemented in `reference_hvp_sdpa.py`
 and have been numerically validated against finite difference baselines.
 These explicit decompositions concretely realize the theoretical framework
 outlined above and serve as a reference for evaluating alternative attention implementations.

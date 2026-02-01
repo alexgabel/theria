@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from theria.attention.reference_backward import sdpa_backward_reference
+from theria.attention.reference_backward_sdpa import sdpa_backward_reference
 from theria.attention.triton_sdpa_backward import sdpa_bwd_dq
 
 

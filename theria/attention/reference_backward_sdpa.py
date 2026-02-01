@@ -6,7 +6,7 @@ Used as the ground truth for Phase 9 Triton backward/JVP/HVP work.
 
 import torch
 
-from theria.attention.reference import reference_attention
+from theria.attention.reference_attention import reference_attention
 
 
 def sdpa_backward_reference(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, dout: torch.Tensor, scale: float):

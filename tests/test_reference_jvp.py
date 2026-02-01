@@ -2,7 +2,7 @@ import torch
 import pytest
 
 from theria.attention.reference import reference_attention
-from theria.attention.reference_jvp import sdpa_jvp_reference
+from theria.attention.reference_jvp_sdpa import sdpa_jvp_reference
 
 
 @pytest.mark.parametrize(
@@ -37,4 +37,3 @@ def test_reference_jvp_matches_autograd(shape):
     jvp_ref = sdpa_jvp_reference(q, k, v, dq, dk, dv, scale)
 
     torch.testing.assert_close(jvp_ref, jvp_autograd, rtol=1e-9, atol=1e-9)
-

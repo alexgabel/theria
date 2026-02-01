@@ -4,16 +4,23 @@ Attention module.
 This package contains reference and experimental attention implementations
 used to study higher-order autodiff behavior (HVP/JVP) in meta-learning.
 
-Concrete exports were intentionally kept local during Phase 2–3; Phase 4
-surfaces a public API for correctness-first custom attention.
+Phase 9 freezes the Triton fused SDPA backend; the surface below is the stable
+API users should touch. Everything else is still importable for experimentation,
+but not part of the public contract.
 """
 
-from .reference import reference_attention
-from .custom import sdpa_custom, sdpa_custom_hvp, sdpa_custom_jvp
+from .triton_qk import triton_sdpa_fused
+from .triton_sdpa_backward import (
+    sdpa_bwd_dq,
+    sdpa_bwd_dk,
+    sdpa_bwd_dv,
+    sdpa_jvp,
+)
 
 __all__ = [
-    "reference_attention",
-    "sdpa_custom",
-    "sdpa_custom_hvp",
-    "sdpa_custom_jvp",
+    "triton_sdpa_fused",
+    "sdpa_bwd_dq",
+    "sdpa_bwd_dk",
+    "sdpa_bwd_dv",
+    "sdpa_jvp",
 ]

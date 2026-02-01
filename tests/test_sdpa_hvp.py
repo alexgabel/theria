@@ -41,7 +41,7 @@ def test_sdpa_explicit_hvp_matches_finite_difference():
     """
 
     from theria.autograd.sdpa_function import SDPAFunction
-    from theria.attention.reference_hvp import sdpa_hvp  # explicit HVP implementation
+    from theria.attention.reference_hvp_sdpa import sdpa_hvp  # explicit HVP implementation
 
     torch.manual_seed(0)
     dtype = torch.double

@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from theria.attention.reference import reference_attention
-from theria.attention.reference_backward import sdpa_backward_reference
+from theria.attention.reference_backward_sdpa import sdpa_backward_reference
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
