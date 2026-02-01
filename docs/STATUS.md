@@ -81,9 +81,7 @@ Delivered:
 - Clear guardrails and failure modes documented
 
 Documentation:
-- docs/phase9_backward.md
-- docs/phase9_jvp.md
-- docs/phase9_hvp.md
+- docs/phase9_operator.md
 
 Key result:
 
