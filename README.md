@@ -39,6 +39,15 @@ theria explores how to:
   - Empirical study of higher-order failure modes
   - Comparison: full MAML vs FO-MAML under different attention backends
 
+### FO-MAML semantics (theria definition)
+
+The CLI flag `--fo` implements the classic first-order MAML approximation:
+- Inner-loop gradients are **not** part of the graph (`create_graph=False` in the inner updates).
+- Outer backprop treats the adapted parameters as constants; no second-order terms flow.
+- Full MAML (`--fo` absent) keeps `create_graph=True` in the inner loop, enabling higher-order meta-gradients.
+
+See `theria/maml/loops.py::inner_adapt` and `docs/theory/maml_derivation.md` for the exact code/path.
+
 👉 **Canonical status & exit criteria:** `docs/STATUS.md`
 
 ---
