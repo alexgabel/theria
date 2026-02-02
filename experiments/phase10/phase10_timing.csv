@@ -1,0 +1,10 @@
+backend,mode,device,inner_steps,inner_lr,warmup_steps,bench_steps,total_ms,ms_per_step
+reference,FULL,cuda,5,0.1,10,100,1671.079956,16.710800
+reference,FO,cuda,5,0.1,10,100,719.040527,7.190405
+reference,FO_STR,cuda,5,0.1,10,100,605.679626,6.056796
+custom,FULL,cuda,5,0.1,10,100,1450.220581,14.502206
+custom,FO,cuda,5,0.1,10,100,767.998840,7.679988
+custom,FO_STR,cuda,5,0.1,10,100,943.794189,9.437942
+triton_fused,FULL,cuda,5,0.1,10,100,1286.249512,12.862495
+triton_fused,FO,cuda,5,0.1,10,100,751.872009,7.518720
+triton_fused,FO_STR,cuda,5,0.1,10,100,931.828735,9.318287
