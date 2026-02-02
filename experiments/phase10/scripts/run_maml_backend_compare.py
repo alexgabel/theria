@@ -15,9 +15,14 @@ Design rules:
 - Minimal logging (stdout / CSV-ready)
 """
 
+from __future__ import annotations
+
 import argparse
 import math
 import contextlib
+import csv
+from pathlib import Path
+import time
 import torch
 import torch.nn as nn
 
@@ -201,6 +206,128 @@ def run_experiment(
 
 
 # -----------------------------
+# Benchmark mode
+# -----------------------------
+
+def _run_one_step(
+    model: Phase10TinyAttentionModel,
+    *,
+    fo_effective: bool,
+    inner_steps: int,
+    inner_lr: float,
+    device: torch.device,
+) -> None:
+    model.zero_grad(set_to_none=True)
+    task = task_sampler(device=device)
+    outer_loss = meta_loss_on_tasks(
+        model=model,
+        tasks=[task],
+        fo=fo_effective,
+        inner_steps=inner_steps,
+        inner_lr=inner_lr,
+    )
+    outer_loss.backward()
+
+
+def run_bench(
+    backend: str,
+    fo: bool,
+    fo_strict: bool,
+    device: torch.device,
+    seed: int,
+    inner_steps: int,
+    inner_lr: float,
+    warmup_steps: int,
+    bench_steps: int,
+    csv_out: str | None,
+) -> None:
+    torch.manual_seed(seed)
+    model = Phase10TinyAttentionModel().to(device)
+    set_attention_backend(model, backend)
+    fo_effective = fo or fo_strict
+    mode = "FO_STR" if fo_strict else ("FO" if fo else "FULL")
+
+    # Warmup: includes Triton compile and CUDA context initialization.
+    for _ in range(warmup_steps):
+        _run_one_step(
+            model,
+            fo_effective=fo_effective,
+            inner_steps=inner_steps,
+            inner_lr=inner_lr,
+            device=device,
+        )
+
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(bench_steps):
+            _run_one_step(
+                model,
+                fo_effective=fo_effective,
+                inner_steps=inner_steps,
+                inner_lr=inner_lr,
+                device=device,
+            )
+        end.record()
+        torch.cuda.synchronize(device)
+        total_ms = start.elapsed_time(end)
+    else:
+        t0 = time.perf_counter()
+        for _ in range(bench_steps):
+            _run_one_step(
+                model,
+                fo_effective=fo_effective,
+                inner_steps=inner_steps,
+                inner_lr=inner_lr,
+                device=device,
+            )
+        total_ms = (time.perf_counter() - t0) * 1000.0
+
+    ms_per_step = total_ms / max(bench_steps, 1)
+    print(
+        f"bench backend={backend} mode={mode} device={device} "
+        f"warmup_steps={warmup_steps} bench_steps={bench_steps} "
+        f"total_ms={total_ms:.3f} ms_per_step={ms_per_step:.3f}"
+    )
+
+    if csv_out:
+        path = Path(csv_out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not path.exists()
+        with path.open("a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(
+                    [
+                        "backend",
+                        "mode",
+                        "device",
+                        "inner_steps",
+                        "inner_lr",
+                        "warmup_steps",
+                        "bench_steps",
+                        "total_ms",
+                        "ms_per_step",
+                    ]
+                )
+            w.writerow(
+                [
+                    backend,
+                    mode,
+                    str(device),
+                    inner_steps,
+                    inner_lr,
+                    warmup_steps,
+                    bench_steps,
+                    f"{total_ms:.6f}",
+                    f"{ms_per_step:.6f}",
+                ]
+            )
+
+
+# -----------------------------
 # CLI
 # -----------------------------
 
@@ -225,23 +352,47 @@ def main():
         action="store_true",
         help="Negative control: compute first-order meta-grad with create_graph=False to break second-order path probe",
     )
+    parser.add_argument("--bench", action="store_true",
+                        help="Run timing benchmark mode (no per-step diagnostics)")
+    parser.add_argument("--warmup-steps", type=int, default=5,
+                        help="Warmup iterations before timed benchmark loop")
+    parser.add_argument("--bench-steps", type=int, default=20,
+                        help="Timed iterations for benchmark mode")
+    parser.add_argument("--csv-out", type=str, default=None,
+                        help="Optional CSV output path for benchmark summary row")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda")
 
     args = parser.parse_args()
 
     device = torch.device(args.device)
-    run_experiment(
-        backend=args.backend,
-        fo=args.fo,
-        fo_strict=args.fo_strict,
-        device=device,
-        seed=args.seed,
-        steps=args.steps,
-        inner_steps=args.inner_steps,
-        inner_lr=args.inner_lr,
-        neg_control_detach_inner=args.neg_control_detach_inner,
-    )
+    if args.bench:
+        if args.inner_lr is None:
+            raise ValueError("inner_lr must be set in --bench mode")
+        run_bench(
+            backend=args.backend,
+            fo=args.fo,
+            fo_strict=args.fo_strict,
+            device=device,
+            seed=args.seed,
+            inner_steps=args.inner_steps,
+            inner_lr=args.inner_lr,
+            warmup_steps=args.warmup_steps,
+            bench_steps=args.bench_steps,
+            csv_out=args.csv_out,
+        )
+    else:
+        run_experiment(
+            backend=args.backend,
+            fo=args.fo,
+            fo_strict=args.fo_strict,
+            device=device,
+            seed=args.seed,
+            steps=args.steps,
+            inner_steps=args.inner_steps,
+            inner_lr=args.inner_lr,
+            neg_control_detach_inner=args.neg_control_detach_inner,
+        )
 
 
 if __name__ == "__main__":
