@@ -1,0 +1,7 @@
+wrapper,attention_backend,status,second_order_path_all,second_order_path_any,second_order_path_attn_all,second_order_path_attn_any,second_order_path_head_all,second_order_path_head_any,attn_second_order_ok,rel_diff_mean,error
+baseline,reference,OK,True,True,True,True,True,True,True,0.144946,
+detach_attention_output,reference,OK,True,True,False,False,True,True,False,0.059529,
+no_grad_attention,reference,HARD_FAIL_UNUSED,,,,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+once_differentiable_sim,reference,HARD_FAIL_ONCE_DIFF,,,,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+stats_detach_logits_sdpa,reference,OK,True,True,True,True,True,True,False,0.095218,
+stats_detach_softmax_output_sdpa,reference,OK,True,True,True,True,True,True,False,0.095218,
