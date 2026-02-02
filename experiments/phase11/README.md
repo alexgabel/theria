@@ -42,13 +42,6 @@ The following wrappers simulate real-world kernel patterns:
 | `backward_detach_logits_sim` | Backward recompute with detached logits | Silent higher-order loss |
 | `detach_q/k/v_input` | Detach a single SDPA input (non-strict) | Meta-signal largely preserved |
 | `detach_q/k/v_input_strict` | Strict detach of SDPA input | Hard fail (unused grad) |
-| `checkpoint_attention` | Correct checkpoint recompute | Safe (keeps higher-order) |
-| `checkpoint_no_grad` | Checkpoint recompute under no_grad | Hard autograd failure |
-| `checkpoint_detach_recompute` | Checkpoint then detach recompute output | Silent curvature collapse |
-| `recompute_logits_no_grad_sdpa` | Logits recomputed under no_grad | Hard autograd failure |
-| `backward_detach_logits_sim` | Backward recompute with detached logits | Silent higher-order loss |
-| `detach_q/k/v_input` | Detach a single SDPA input (non-strict) | Meta-signal largely preserved |
-| `detach_q/k/v_input_strict` | Strict detach of SDPA input | Hard fail (unused grad) |
 
 ---
 
@@ -59,8 +52,9 @@ Run the Phase-11 taxonomy runner:
 ```bash
 python experiments/phase11/scripts/run_bad_backend_diagnostics.py \
   --backend all \
+  --attention-backend reference \
   --steps 5 \
-  --inner-steps 5 \
+  --inner-steps-list "1,5,10,20" \
   --device cpu
 ```
 
@@ -116,34 +110,6 @@ Reminder: for safe kernels, `rel_diff` is expected to grow with inner depth; sup
 - Partial detaches (non-strict) do NOT remove attention curvature; strict variants hard-fail (unused grad).
 - Quantitatively, silent-collapse variants drive attention-local second-order signal to (near) zero (e.g., grad_norm_q/k/v ≈ 0) while rel_diff can reach ~0.7 at k=20, indicating downstream curvature dominance despite attention curvature removal.
 
-## Checkpointing and meta-learning safety
-
-Gradient checkpointing is meta-learning safe **iff** recomputation preserves second-order connectivity through attention.
-
-Empirically:
-- `checkpoint_attention` preserves attention-local grad-grad and matches baseline.
-- `checkpoint_no_grad` hard-fails (graph broken).
-- `checkpoint_detach_recompute` silently removes attention curvature while leaving global second-order paths intact.
-
-Thus, checkpointing itself is not unsafe; detached recomputation is.
-
-## Backend-agnostic boundary
-
-All failure modes were reproduced across reference, custom, and (where supported) triton_fused attention implementations, indicating these safety boundaries are backend-agnostic.
-
-## Empirical safety theorem (Phase 11)
-
-An attention implementation is second-order meta-learning safe iff:
-1. its backward is differentiable (no `@once_differentiable` boundary),
-2. recomputation does not occur under `no_grad`,
-3. internal attention statistics (logits or softmax outputs) participate in higher-order autodiff,
-4. checkpoint recomputation preserves gradient connectivity.
-
-Violating any condition yields either hard autograd failure or silent curvature collapse.
-
-## Key negative result
-
-Silent failures are more dangerous than hard failures. Variants like `detach_attention_output`, `checkpoint_detach_recompute`, and `stats_detach_*` complete successfully, report valid losses, and expose global second-order paths, yet remove all attention-local curvature. These failures are undetectable without targeted second-order probes.
 ## Interpreting results
 
 ### Silent failures (most dangerous)
@@ -188,6 +154,35 @@ Characteristics:
 Interpretation:
 
 First-order compatibility != higher-order compatibility.
+
+## Checkpointing and meta-learning safety
+
+Gradient checkpointing is meta-learning safe **iff** recomputation preserves second-order connectivity through attention.
+
+Empirically:
+- `checkpoint_attention` preserves attention-local grad-grad and matches baseline.
+- `checkpoint_no_grad` hard-fails (graph broken).
+- `checkpoint_detach_recompute` silently removes attention curvature while leaving global second-order paths intact.
+
+Thus, checkpointing itself is not unsafe; detached recomputation is.
+
+## Backend-agnostic boundary
+
+All failure modes were reproduced across reference, custom, and (where supported) triton_fused attention implementations, indicating these safety boundaries are backend-agnostic.
+
+## Empirical safety theorem (Phase 11)
+
+An attention implementation is second-order meta-learning safe iff:
+1. its backward is differentiable (no `@once_differentiable` boundary),
+2. recomputation does not occur under `no_grad`,
+3. internal attention statistics (logits or softmax outputs) participate in higher-order autodiff,
+4. checkpoint recomputation preserves gradient connectivity.
+
+Violating any condition yields either hard autograd failure or silent curvature collapse.
+
+## Key negative result
+
+Silent failures are more dangerous than hard failures. Variants like `detach_attention_output`, `checkpoint_detach_recompute`, and `stats_detach_*` complete successfully, report valid losses, and expose global second-order paths, yet remove all attention-local curvature. These failures are undetectable without targeted second-order probes.
 
 ## Phase-11 safety statement
 
