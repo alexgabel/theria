@@ -1,0 +1,37 @@
+wrapper,attention_backend,inner_steps,seed,steps,status,second_order_path_all,second_order_path_any,second_order_path_attn_all,second_order_path_attn_any,second_order_path_head_all,second_order_path_head_any,sdpa_input_gradgrad_ok,rel_diff_mean,grad_norm_q_proj,grad_norm_k_proj,grad_norm_v_proj,error
+checkpoint_attention,reference,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+checkpoint_attention,reference,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+checkpoint_attention,reference,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922204971313477,31.833553314208984,
+checkpoint_attention,reference,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+checkpoint_attention,custom,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+checkpoint_attention,custom,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+checkpoint_attention,custom,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922203063964844,31.833553314208984,
+checkpoint_attention,custom,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+checkpoint_attention,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_no_grad,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,reference,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,

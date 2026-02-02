@@ -23,7 +23,18 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.phase10.scripts import run_maml_backend_compare as p10
 from bad_backends import (
+    checkpoint_attention,
+    checkpoint_no_grad,
+    checkpoint_detach_recompute,
+    recompute_logits_no_grad_sdpa,
+    backward_detach_logits_sim,
     detach_attention_output,
+    detach_q_input,
+    detach_k_input,
+    detach_v_input,
+    detach_q_input_strict,
+    detach_k_input_strict,
+    detach_v_input_strict,
     no_grad_attention,
     once_differentiable_sim,
     stats_detach_logits_sdpa,
@@ -81,7 +92,7 @@ def _run_one_step(
     inner_steps: int,
     inner_lr: float,
     device: torch.device,
-) -> tuple[bool, bool, bool, float]:
+) -> tuple[bool, bool, bool, float, dict[str, float], dict[str, bool]]:
     model.zero_grad(set_to_none=True)
     task = p10.task_sampler(device=device)
 
@@ -161,7 +172,24 @@ def _run_one_step(
 
     # Mirror the Phase-10 FULL path; this is where once_differentiable_sim hard-fails.
     outer_loss_full.backward()
-    return second_order_ok_global, second_order_ok_attn, second_order_ok_head, rel_diff
+
+    # Grad norms for attention projections (optional debugging)
+    grad_norms = {}
+    grad_zeros = {}
+    for name, p in model.named_parameters():
+        if "proj" in name and p.grad is not None:
+            gn = p.grad.detach().abs().sum().item()
+            grad_norms[name] = gn
+            grad_zeros[name] = gn < 1e-8
+
+    return (
+        second_order_ok_global,
+        second_order_ok_attn,
+        second_order_ok_head,
+        rel_diff,
+        grad_norms,
+        grad_zeros,
+    )
 
 
 def run_backend(
@@ -187,10 +215,19 @@ def run_backend(
     second_order_attn_flags: list[bool] = []
     second_order_head_flags: list[bool] = []
     rel_diffs: list[float] = []
+    grad_norms_list: list[dict[str, float]] = []
+    grad_zero_list: list[dict[str, bool]] = []
 
     try:
         for _ in range(steps):
-            second_order_ok, second_order_attn_ok, second_order_head_ok, rel_diff = _run_one_step(
+            (
+                second_order_ok,
+                second_order_attn_ok,
+                second_order_head_ok,
+                rel_diff,
+                grad_norms,
+                grad_zeros,
+            ) = _run_one_step(
                 model=model,
                 inner_steps=inner_steps,
                 inner_lr=inner_lr,
@@ -200,7 +237,22 @@ def run_backend(
             second_order_attn_flags.append(second_order_attn_ok)
             second_order_head_flags.append(second_order_head_ok)
             rel_diffs.append(rel_diff)
+            grad_norms_list.append(grad_norms)
+            grad_zero_list.append(grad_zeros)
         mean_rel = sum(rel_diffs) / len(rel_diffs) if rel_diffs else float("nan")
+        # Aggregate grad norms (mean) for q/k/v if present
+        def _mean_norm(key_substr: str):
+            vals = []
+            for d in grad_norms_list:
+                for k, v in d.items():
+                    if key_substr in k:
+                        vals.append(v)
+            return sum(vals) / len(vals) if vals else ""
+
+        grad_q = _mean_norm("q_proj.weight")
+        grad_k = _mean_norm("k_proj.weight")
+        grad_v = _mean_norm("v_proj.weight")
+
         row = {
             "wrapper": wrapper_name,
             "attention_backend": attention_backend,
@@ -211,8 +263,11 @@ def run_backend(
             "second_order_path_attn_any": str(any(second_order_attn_flags)),
             "second_order_path_head_all": str(all(second_order_head_flags)),
             "second_order_path_head_any": str(any(second_order_head_flags)),
-            "attn_second_order_ok": str(attn_second_order_ok),
+            "sdpa_input_gradgrad_ok": str(attn_second_order_ok),
             "rel_diff_mean": f"{mean_rel:.6f}",
+            "grad_norm_q_proj": grad_q,
+            "grad_norm_k_proj": grad_k,
+            "grad_norm_v_proj": grad_v,
             "error": "",
         }
     except Exception as exc:
@@ -233,8 +288,11 @@ def run_backend(
             "second_order_path_attn_any": "",
             "second_order_path_head_all": "",
             "second_order_path_head_any": "",
-            "attn_second_order_ok": str(attn_second_order_ok),
+            "sdpa_input_gradgrad_ok": str(attn_second_order_ok),
             "rel_diff_mean": "",
+            "grad_norm_q_proj": "",
+            "grad_norm_k_proj": "",
+            "grad_norm_v_proj": "",
             "error": msg,
         }
     finally:
@@ -253,6 +311,17 @@ def main() -> None:
             "all",
             "baseline",
             "detach_attention_output",
+            "detach_q_input",
+            "detach_k_input",
+            "detach_v_input",
+            "detach_q_input_strict",
+            "detach_k_input_strict",
+            "detach_v_input_strict",
+            "recompute_logits_no_grad_sdpa",
+            "backward_detach_logits_sim",
+            "checkpoint_attention",
+            "checkpoint_no_grad",
+            "checkpoint_detach_recompute",
             "no_grad_attention",
             "once_differentiable_sim",
             "stats_detach_logits_sdpa",
@@ -268,7 +337,14 @@ def main() -> None:
         help="Phase-10 attention backend selection.",
     )
     parser.add_argument("--steps", type=int, default=5)
-    parser.add_argument("--inner-steps", type=int, default=5)
+    parser.add_argument("--inner-steps", type=int, default=5,
+                        help="Inner steps (used if --inner-steps-list not set)")
+    parser.add_argument(
+        "--inner-steps-list",
+        type=str,
+        default=None,
+        help='Comma-separated inner-step values (e.g., "1,5,10,20"). If set, overrides --inner-steps.',
+    )
     parser.add_argument("--inner-lr", type=float, default=0.4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cpu")
@@ -279,9 +355,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    def _parse_int_list(s: str) -> list[int]:
+        return [int(x.strip()) for x in s.split(",") if x.strip()]
+
     wrappers: dict[str, Wrapper | None] = {
         "baseline": None,
         "detach_attention_output": detach_attention_output,
+        "detach_q_input": detach_q_input,
+        "detach_k_input": detach_k_input,
+        "detach_v_input": detach_v_input,
+        "detach_q_input_strict": detach_q_input_strict,
+        "detach_k_input_strict": detach_k_input_strict,
+        "detach_v_input_strict": detach_v_input_strict,
+        "recompute_logits_no_grad_sdpa": recompute_logits_no_grad_sdpa,
+        "backward_detach_logits_sim": backward_detach_logits_sim,
+        "checkpoint_attention": checkpoint_attention,
+        "checkpoint_no_grad": checkpoint_no_grad,
+        "checkpoint_detach_recompute": checkpoint_detach_recompute,
         "no_grad_attention": no_grad_attention,
         "once_differentiable_sim": once_differentiable_sim,
         "stats_detach_logits_sdpa": stats_detach_logits_sdpa,
@@ -290,29 +380,35 @@ def main() -> None:
     selected = list(wrappers.keys()) if args.backend == "all" else [args.backend]
 
     device = torch.device(args.device)
+    inner_steps_list = (
+        _parse_int_list(args.inner_steps_list)
+        if args.inner_steps_list
+        else [args.inner_steps]
+    )
     rows = []
     for name in selected:
-        row = run_backend(
-            wrapper_name=name,
-            wrapper=wrappers[name],
-            attention_backend=args.attention_backend,
-            seed=args.seed,
-            steps=args.steps,
-            inner_steps=args.inner_steps,
-            inner_lr=args.inner_lr,
-            device=device,
-        )
-        rows.append(row)
-        print(
-            f"wrapper={row['wrapper']} attn={row['attention_backend']} status={row['status']} "
-            f"second_order_path_any={row['second_order_path_any'] or 'NA'} "
-            f"second_order_path_attn_any={row.get('second_order_path_attn_any', 'NA') or 'NA'} "
-            f"second_order_path_head_any={row.get('second_order_path_head_any', 'NA') or 'NA'} "
-            f"attn_second_order_ok={row.get('attn_second_order_ok','NA')} "
-            f"rel_diff_mean={row['rel_diff_mean'] or 'NA'}"
-        )
-        if row["error"]:
-            print(f"  error={row['error']}")
+        for inner_steps in inner_steps_list:
+            row = run_backend(
+                wrapper_name=name,
+                wrapper=wrappers[name],
+                attention_backend=args.attention_backend,
+                seed=args.seed,
+                steps=args.steps,
+                inner_steps=inner_steps,
+                inner_lr=args.inner_lr,
+                device=device,
+            )
+            rows.append(row)
+            print(
+                f"wrapper={row['wrapper']} attn={row['attention_backend']} k={inner_steps} status={row['status']} "
+                f"second_order_path_any={row['second_order_path_any'] or 'NA'} "
+                f"second_order_path_attn_any={row.get('second_order_path_attn_any', 'NA') or 'NA'} "
+                f"second_order_path_head_any={row.get('second_order_path_head_any', 'NA') or 'NA'} "
+                f"sdpa_input_gradgrad_ok={row.get('sdpa_input_gradgrad_ok','NA')} "
+                f"rel_diff_mean={row['rel_diff_mean'] or 'NA'}"
+            )
+            if row["error"]:
+                print(f"  error={row['error']}")
 
     out_path = Path(args.csv_out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,8 +425,11 @@ def main() -> None:
                 "second_order_path_attn_any",
                 "second_order_path_head_all",
                 "second_order_path_head_any",
-                "attn_second_order_ok",
+                "sdpa_input_gradgrad_ok",
                 "rel_diff_mean",
+                "grad_norm_q_proj",
+                "grad_norm_k_proj",
+                "grad_norm_v_proj",
                 "error",
             ],
         )

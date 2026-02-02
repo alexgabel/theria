@@ -1,0 +1,37 @@
+wrapper,attention_backend,inner_steps,seed,steps,status,second_order_path_all,second_order_path_any,second_order_path_attn_all,second_order_path_attn_any,second_order_path_head_all,second_order_path_head_any,sdpa_input_gradgrad_ok,rel_diff_mean,grad_norm_q_proj,grad_norm_k_proj,grad_norm_v_proj,error
+checkpoint_attention,reference,1,0,1,OK,True,True,True,True,True,True,True,0.170703,5.6869425773620605,5.702404975891113,14.99581527709961,
+checkpoint_attention,reference,5,0,1,OK,True,True,True,True,True,True,True,0.594291,20.84785270690918,20.43225860595703,24.920486450195312,
+checkpoint_attention,reference,10,0,1,OK,True,True,True,True,True,True,True,0.539437,36.98258972167969,30.54349136352539,23.51898956298828,
+checkpoint_attention,reference,20,0,1,OK,True,True,True,True,True,True,True,0.684092,51.477699279785156,41.542755126953125,27.580087661743164,
+checkpoint_attention,custom,1,0,1,OK,True,True,True,True,True,True,True,0.170703,5.686943054199219,5.702404975891113,14.99581527709961,
+checkpoint_attention,custom,5,0,1,OK,True,True,True,True,True,True,True,0.594291,20.84785270690918,20.43225860595703,24.920486450195312,
+checkpoint_attention,custom,10,0,1,OK,True,True,True,True,True,True,True,0.539437,36.98258972167969,30.54349136352539,23.51898956298828,
+checkpoint_attention,custom,20,0,1,OK,True,True,True,True,True,True,True,0.684092,51.477699279785156,41.542755126953125,27.58008575439453,
+checkpoint_attention,triton_fused,1,0,1,OK,True,True,True,True,True,True,True,0.114279,5.251514434814453,5.215930461883545,15.087333679199219,
+checkpoint_attention,triton_fused,5,0,1,OK,True,True,True,True,True,True,True,0.384570,14.968767166137695,14.138349533081055,20.35714340209961,
+checkpoint_attention,triton_fused,10,0,1,OK,True,True,True,True,True,True,True,0.290522,30.620407104492188,24.094886779785156,21.879745483398438,
+checkpoint_attention,triton_fused,20,0,1,OK,True,True,True,True,True,True,True,0.304418,41.31315231323242,30.17996597290039,20.453624725341797,
+checkpoint_no_grad,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_detach_recompute,reference,1,0,1,OK,True,True,False,False,True,True,False,0.057633,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,5,0,1,OK,True,True,False,False,True,True,False,0.282257,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,10,0,1,OK,True,True,False,False,True,True,False,0.509924,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,20,0,1,OK,True,True,False,False,True,True,False,0.708681,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,1,0,1,OK,True,True,False,False,True,True,False,0.057633,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,5,0,1,OK,True,True,False,False,True,True,False,0.282257,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,10,0,1,OK,True,True,False,False,True,True,False,0.509924,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,20,0,1,OK,True,True,False,False,True,True,False,0.708681,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,1,0,1,OK,True,True,False,False,True,True,False,0.057652,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,5,0,1,OK,True,True,False,False,True,True,False,0.282402,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,10,0,1,OK,True,True,False,False,True,True,False,0.510293,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,20,0,1,OK,True,True,False,False,True,True,False,0.709301,0.0,0.0,0.0,
