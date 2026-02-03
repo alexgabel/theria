@@ -52,6 +52,8 @@ def _get_bwd_reuse_buffers(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) ->
     if cached is None:
         cached = {
             "delta": torch.empty((B, H, T), device=q.device, dtype=torch.float32),
+            # Reused for elementwise grad_out * out before row-sum.
+            "delta_tmp": torch.empty_like(q),
             "dq": torch.empty_like(q),
             "dk": torch.empty_like(k),
             "dv": torch.empty_like(v),
@@ -444,7 +446,9 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
             ev_delta_start.record()
         if reuse_buffers is not None:
             delta = reuse_buffers["delta"]
-            torch.sum(grad_out.float() * out.float(), dim=-1, out=delta)
+            delta_tmp = reuse_buffers["delta_tmp"]
+            torch.mul(grad_out, out, out=delta_tmp)
+            torch.sum(delta_tmp, dim=-1, dtype=torch.float32, out=delta)
         else:
             delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
         if profile_bwd:
