@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.phase10.scripts import run_maml_backend_compare as p10
-from bad_backends import (
+from experiments.phase11.scripts.bad_backends import (
     checkpoint_attention,
     checkpoint_no_grad,
     checkpoint_detach_recompute,

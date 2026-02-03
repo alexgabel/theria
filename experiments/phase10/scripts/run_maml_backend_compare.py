@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 
 from theria.attention.custom import sdpa_custom
+from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
 from theria.models.tiny_attention import TinyAttentionConfig
 from theria.tasks.synthetic_seqcls import task_sampler
 from theria.maml.loops import meta_loss_on_tasks
@@ -107,6 +108,7 @@ def run_experiment(
     inner_steps: int,
     inner_lr: float | None,
     neg_control_detach_inner: bool,
+    capture_metrics: bool = False,
 ):
     if inner_steps > 0 and inner_lr is None:
         raise ValueError("inner_lr must be set when inner_steps > 0")
@@ -115,9 +117,17 @@ def run_experiment(
     model = Phase10TinyAttentionModel().to(device)
     set_attention_backend(model, backend)
 
-    # FO-strict implies FO behavior and forced detachment for diagnostics.
-    fo_effective = fo or fo_strict
-    neg_control_detach_effective = neg_control_detach_inner or fo_strict
+    if fo_strict:
+        mode = "FO_STRICT"
+    elif fo:
+        mode = "FO"
+    else:
+        mode = "FULL"
+
+    create_graph = mode == "FULL"
+    detach_phi = mode == "FO_STRICT"
+    fo_effective = mode != "FULL"
+    neg_control_detach_effective = neg_control_detach_inner or (not create_graph)
 
     for step in range(steps):
         model.zero_grad(set_to_none=True)
@@ -125,20 +135,33 @@ def run_experiment(
         task = task_sampler(device=device)
 
         # Compute BOTH full and FO meta-losses on the same task for diagnostics.
-        outer_loss_full = meta_loss_on_tasks(
+        outer_full = meta_loss_on_tasks(
             model=model,
             tasks=[task],
             fo=False,
+            fo_strict=False,
             inner_steps=inner_steps,
             inner_lr=inner_lr if inner_lr is not None else None,
+            return_metrics=capture_metrics,
         )
-        outer_loss_fo = meta_loss_on_tasks(
+        if capture_metrics:
+            outer_loss_full, metrics_full = outer_full
+        else:
+            outer_loss_full = outer_full
+
+        outer_fo = meta_loss_on_tasks(
             model=model,
             tasks=[task],
             fo=True,
+            fo_strict=detach_phi,
             inner_steps=inner_steps,
             inner_lr=inner_lr if inner_lr is not None else None,
+            return_metrics=capture_metrics,
         )
+        if capture_metrics:
+            outer_loss_fo, metrics_fo = outer_fo
+        else:
+            outer_loss_fo = outer_fo
 
         # The loss actually used for training follows the selected mode.
         outer_loss = outer_loss_fo if fo_effective else outer_loss_full
@@ -197,12 +220,30 @@ def run_experiment(
         print(
             f"step={step:03d} "
             f"backend={backend:<12} "
-            f"mode={'FO_STR' if fo_strict else ('FO' if fo else 'FULL'):<6} "
+            f"mode={mode:<9} "
             f"loss={outer_loss.item():.6f} "
             f"grad_norm={gnorm:.6f} "
             f"second_order_path={second_order_ok} "
             f"rel_diff_full_vs_fo={rel_diff:.4f}"
         )
+    if capture_metrics:
+        # Attention-local probe (once per run)
+        attn_signal_present = _attention_second_order_ok(sdpa_custom, device=device)
+        grad_norms = {}
+        for name, p in model.named_parameters():
+            if p.grad is not None and any(k in name for k in ["q_proj", "k_proj", "v_proj"]):
+                grad_norms[name] = p.grad.detach().abs().sum().item()
+
+        chosen_metrics = metrics_fo if fo_effective else metrics_full
+        return {
+            "final_loss": outer_loss.item(),
+            "final_acc": chosen_metrics.get("post_adapt_acc", None) if capture_metrics else None,
+            "attn_signal_present": attn_signal_present,
+            "grad_norm_q_proj": grad_norms.get("q_proj.weight", 0.0),
+            "grad_norm_k_proj": grad_norms.get("k_proj.weight", 0.0),
+            "grad_norm_v_proj": grad_norms.get("v_proj.weight", 0.0),
+            "steps": steps,
+        }
 
 
 # -----------------------------
@@ -223,6 +264,7 @@ def _run_one_step(
         model=model,
         tasks=[task],
         fo=fo_effective,
+        fo_strict=fo_effective,
         inner_steps=inner_steps,
         inner_lr=inner_lr,
     )

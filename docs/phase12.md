@@ -124,3 +124,25 @@ Phase 12 begins once:
 - Task difficulty is verified (FULL > FO at sufficient inner depth).
 
 Only then do Triton runs proceed.
+
+---
+
+## Runner invocation (example)
+
+One run (reference backend, FULL, k=20, seed=0):
+
+```bash
+python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend reference \
+  --mode FULL \
+  --outer-steps 500 \
+  --meta-batch-size 16 \
+  --inner-steps 20 \
+  --inner-lr 0.4 \
+  --outer-lr 1e-3 \
+  --seed 0 \
+  --device cpu \
+  --csv-out experiments/phase12/runs/phase12_behavior_reference.csv
+```
+
+Repeat for `mode=FO`, `mode=FO_STRICT`, inner_steps in `{1,5,10,20}`, seeds `{0,1}`, and `--backend triton_fused` on CUDA. Each run appends one row to the CSV.

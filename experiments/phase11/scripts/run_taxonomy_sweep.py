@@ -24,8 +24,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch
 
-from run_bad_backend_diagnostics import run_backend
-from bad_backends import (
+from experiments.phase11.scripts.run_bad_backend_diagnostics import run_backend
+from experiments.phase11.scripts.bad_backends import (
     detach_attention_output,
     detach_q_input,
     detach_k_input,
@@ -166,4 +166,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

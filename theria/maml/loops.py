@@ -95,7 +95,9 @@ def meta_loss_on_tasks(
     inner_lr: float = 0.1,
     inner_steps: int = 1,
     fo: bool = False,
-) -> torch.Tensor:
+    fo_strict: bool = False,
+    return_metrics: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
     """
     Compute meta-loss across a batch/list of tasks:
       J(theta) = mean_t L_query(phi_K(theta; support_t); query_t)
@@ -104,9 +106,18 @@ def meta_loss_on_tasks(
     buffers = named_buffers(model)
 
     losses = []
+    accs = []
     for task in tasks:
         phi = inner_adapt(model, params, buffers, task, inner_lr=inner_lr, inner_steps=inner_steps, fo=fo)
-        losses.append(outer_loss(model, phi, buffers, task))
-    # NOTE: We intentionally do not detach phi between steps.
-    # This preserves higher-order gradients for full MAML.
-    return torch.stack(losses).mean()
+        if fo_strict:
+            phi = OrderedDict((k, v.detach().clone()) for k, v in phi.items())
+        logits_q = functional_call(model, (phi, buffers), (task.x_q,))
+        post_loss = loss_fn(logits_q, task.y_q)
+        post_acc = (logits_q.argmax(dim=-1) == task.y_q).float().mean()
+        losses.append(post_loss)
+        accs.append(post_acc)
+    outer = torch.stack(losses).mean()
+    if return_metrics:
+        mean_acc = torch.stack(accs).mean()
+        return outer, {"post_adapt_loss": outer.item(), "post_adapt_acc": mean_acc.item()}
+    return outer
