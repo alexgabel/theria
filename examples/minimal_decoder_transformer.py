@@ -47,6 +47,38 @@ import torch.nn as nn
 from theria.attention.custom import sdpa_custom
 
 
+class _ContiguousGrad(torch.autograd.Function):
+    """
+    Identity function that ensures gradient contiguity for triton kernels.
+
+    Background:
+    - Triton backward kernels require contiguous `dout` (gradient w.r.t. output)
+    - Multi-head attention uses transpose operations: (B,H,T,D) → (B,T,H,D)
+    - Transpose backward creates non-contiguous gradients
+    - This breaks triton's backward contract
+
+    Solution:
+    - Apply this wrapper right after sdpa_custom()
+    - Forward pass: identity (no overhead)
+    - Backward pass: ensures gradient is contiguous before reaching triton kernels
+
+    Note: Single-head attention (using unsqueeze instead of transpose) doesn't need this.
+    """
+    @staticmethod
+    def forward(ctx, x):  # noqa: ARG004 - ctx required by autograd.Function signature
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output):  # noqa: ARG004 - ctx required by autograd.Function signature
+        # Ensure gradient is contiguous before passing to triton backward kernels
+        return grad_output.contiguous()
+
+
+def _ensure_contiguous_grad(x):
+    """Helper to ensure gradient contiguity without affecting forward pass."""
+    return _ContiguousGrad.apply(x)
+
+
 class MultiHeadAttention(nn.Module):
     """
     Multi-head self-attention using theria's fused backend.
@@ -108,9 +140,14 @@ class MultiHeadAttention(nn.Module):
         # Call theria's fused attention
         attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
 
+        # CRITICAL: Ensure gradient contiguity for triton backward
+        # The transpose operations below create non-contiguous gradients in backward pass,
+        # but triton kernels require contiguous dout. This wrapper ensures contiguity.
+        attn_out = _ensure_contiguous_grad(attn_out)
+
         # Transpose back and reshape to (B, T, D)
         attn_out = attn_out.transpose(1, 2).contiguous()  # (B, T, H, D//H)
-        attn_out = attn_out.view(B, T, D)  # (B, T, D)
+        attn_out = attn_out.reshape(B, T, D)  # (B, T, D)
 
         # Output projection
         return self.out_proj(attn_out)
@@ -259,7 +296,7 @@ def validate_fused_backend_constraints(d_model, n_heads, device_type, backend):
 
 def create_dummy_task(batch_size, seq_len, vocab_size, num_classes, device):
     """
-    Create a random sequence classification task.
+    Create a random sequence classification task (no learnable patterns).
 
     Returns:
         x: Random token indices of shape (B, T)
@@ -268,6 +305,47 @@ def create_dummy_task(batch_size, seq_len, vocab_size, num_classes, device):
     x = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
     y = torch.randint(0, num_classes, (batch_size,), device=device)
     return x, y
+
+
+def create_synthetic_task(batch_size, vocab_size, num_classes, seq_len, seed, device):
+    """
+    Create a learnable synthetic task with consistent token patterns.
+
+    Rule: The class is determined by which "signal token" appears first in the sequence.
+    - Signal tokens: vocab_size - num_classes to vocab_size - 1
+    - Signal token K → class K
+    - Background tokens: 0 to vocab_size - num_classes - 1
+
+    Unlike random data, this has a learnable pattern the model can extract.
+
+    Returns:
+        get_batch: Function that generates (x, y) batches with consistent patterns
+    """
+    # Set seed for reproducibility
+    rng = torch.Generator(device=device)
+    rng.manual_seed(seed)
+
+    # Define signal tokens (last num_classes tokens in vocab)
+    signal_tokens = list(range(vocab_size - num_classes, vocab_size))
+    background_vocab_size = vocab_size - num_classes
+
+    def get_batch():
+        # Sample classes uniformly
+        y = torch.randint(0, num_classes, (batch_size,), device=device, generator=rng)
+
+        # Create sequences filled with background tokens
+        x = torch.randint(0, background_vocab_size, (batch_size, seq_len), device=device, generator=rng)
+
+        # Inject signal tokens at random positions
+        for i in range(batch_size):
+            # Choose random position to inject signal (avoid position 0 which is used for classification)
+            signal_pos = torch.randint(1, seq_len, (1,), device=device, generator=rng).item()
+            # Insert signal token corresponding to the class
+            x[i, signal_pos] = signal_tokens[y[i].item()]
+
+        return x, y
+
+    return get_batch
 
 
 def train_step(model, x, y, optimizer):
@@ -338,6 +416,13 @@ def main():
     parser.add_argument("--steps", type=int, default=20, help="Number of training steps (default: 20)")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3)")
 
+    # Task parameters
+    parser.add_argument(
+        "--use-synthetic-task",
+        action="store_true",
+        help="Use learnable synthetic task instead of random data (shows actual learning)"
+    )
+
     # System parameters
     parser.add_argument("--device", type=str, default="cuda", help="Device (default: cuda)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
@@ -353,6 +438,7 @@ def main():
     print(f"Architecture: d_model={args.d_model}, n_heads={args.n_heads}, n_layers={args.n_layers}")
     print(f"Per-head dimension: {args.d_model // args.n_heads}")
     print(f"Device: {args.device}")
+    print(f"Task: {'Synthetic (learnable)' if args.use_synthetic_task else 'Random (no patterns)'}")
     print(f"Training steps: {args.steps}")
     print("=" * 60)
 
@@ -390,14 +476,31 @@ def main():
     # Create optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # Create task function
+    if args.use_synthetic_task:
+        print(f"\nUsing synthetic learnable task (expect loss to decrease)")
+        print(f"Pattern: Signal tokens {args.vocab_size - args.num_classes}-{args.vocab_size - 1} determine class")
+        get_batch = create_synthetic_task(
+            batch_size=args.batch_size,
+            vocab_size=args.vocab_size,
+            num_classes=args.num_classes,
+            seq_len=args.seq_len,
+            seed=args.seed,
+            device=device
+        )
+    else:
+        print(f"\nUsing random task (loss will fluctuate, not decrease)")
+        def get_batch():
+            return create_dummy_task(args.batch_size, args.seq_len, args.vocab_size, args.num_classes, device)
+
     # Training loop
-    print(f"\nTraining for {args.steps} steps...")
+    print(f"Training for {args.steps} steps...")
     print("-" * 60)
 
     losses = []
     for step in range(args.steps):
-        # Create dummy batch
-        x, y = create_dummy_task(args.batch_size, args.seq_len, args.vocab_size, args.num_classes, device)
+        # Get batch
+        x, y = get_batch()
 
         # Training step
         loss = train_step(model, x, y, optimizer)
