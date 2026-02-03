@@ -7,6 +7,7 @@ autograd correctness while keeping the kernel minimal.
 """
 
 import os
+from typing import Dict, Tuple, Union
 import torch
 import triton
 import triton.language as tl
@@ -27,7 +28,7 @@ _TRITON_SDPA_BWD_PROFILE = {
     "shared_ms_sum": 0.0,
 }
 
-_TRITON_SDPA_BWD_BUFFER_CACHE: dict[tuple, dict[str, torch.Tensor]] = {}
+_TRITON_SDPA_BWD_BUFFER_CACHE: Dict[Tuple, Dict[str, torch.Tensor]] = {}
 
 
 def reset_triton_sdpa_bwd_profile() -> None:
@@ -36,12 +37,12 @@ def reset_triton_sdpa_bwd_profile() -> None:
         _TRITON_SDPA_BWD_PROFILE[key] = 0 if key.endswith("calls") else 0.0
 
 
-def get_triton_sdpa_bwd_profile() -> dict[str, float | int]:
+def get_triton_sdpa_bwd_profile() -> Dict[str, Union[float, int]]:
     """Return cumulative backward timing stats for Triton fused SDPA."""
     return dict(_TRITON_SDPA_BWD_PROFILE)
 
 
-def _get_bwd_reuse_buffers(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> dict[str, torch.Tensor]:
+def _get_bwd_reuse_buffers(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Dict[str, torch.Tensor]:
     """
     Return reusable backward buffers keyed by shape/device/dtype.
     Enabled via THERIA_SDPA_BWD_REUSE=1 to reduce allocator overhead.

@@ -69,6 +69,7 @@ def _run_attention_breakdown_onpath(
     steps: int,
     lr: float,
     symmetric_layout: bool,
+    cuda_graph: bool,
     device: torch.device,
 ) -> dict[str, float]:
     from theria.attention.triton_qk import (
@@ -98,6 +99,7 @@ def _run_attention_breakdown_onpath(
         warmup_steps=warmup,
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
+        cuda_graph=cuda_graph,
     )
     ref_buckets = minimal.get_step_profile()
 
@@ -120,6 +122,7 @@ def _run_attention_breakdown_onpath(
         warmup_steps=warmup,
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
+        cuda_graph=cuda_graph,
     )
     tri_buckets = minimal.get_step_profile()
     profile = get_triton_sdpa_bwd_profile()
@@ -191,6 +194,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--bench-warmup", type=int, default=20)
     parser.add_argument("--bench-steps", type=int, default=200)
+    parser.add_argument("--bench-cuda-graph", action="store_true", help="Use CUDA Graph replay in benchmark runs")
     parser.add_argument("--dtype", type=str, default="float16", choices=["float16", "float32", "bfloat16"])
     parser.add_argument("--benchmark-symmetric-layout", action="store_true")
     parser.add_argument("--bwd-shared", type=int, default=0, choices=[0, 1], help="Set THERIA_SDPA_BWD_SHARED")
@@ -230,6 +234,7 @@ def main() -> None:
             warmup_steps=args.bench_warmup,
             bench_steps=args.bench_steps,
             symmetric_layout=args.benchmark_symmetric_layout,
+            cuda_graph=args.bench_cuda_graph,
         )
         tri = minimal.benchmark_backend(
             backend="triton_full_fused",
@@ -247,6 +252,7 @@ def main() -> None:
             warmup_steps=args.bench_warmup,
             bench_steps=args.bench_steps,
             symmetric_layout=args.benchmark_symmetric_layout,
+            cuda_graph=args.bench_cuda_graph,
         )
         ref_ms = float(ref["ms_per_step"])
         tri_ms = float(tri["ms_per_step"])
@@ -266,6 +272,7 @@ def main() -> None:
                 "d_model": args.d_model,
                 "n_heads": args.n_heads,
                 "bench_steps": args.bench_steps,
+                "cuda_graph": int(args.bench_cuda_graph),
                 "bwd_shared": args.bwd_shared,
                 "bwd_reuse": args.bwd_reuse,
                 "symmetric_layout": int(args.benchmark_symmetric_layout),
@@ -308,6 +315,7 @@ def main() -> None:
         warmup=args.breakdown_warmup,
         steps=args.breakdown_steps,
         symmetric_layout=args.benchmark_symmetric_layout,
+        cuda_graph=args.bench_cuda_graph,
         device=device,
     )
     print("\n=== Attention Breakdown (on-path ms/call) ===")

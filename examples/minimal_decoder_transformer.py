@@ -49,6 +49,7 @@ import contextlib
 import csv
 import os
 import time
+from typing import Dict
 import torch
 import torch.nn as nn
 from theria.attention.custom import sdpa_custom
@@ -66,13 +67,17 @@ def reset_step_profile() -> None:
         _STEP_PROFILE_MS[k] = 0.0
 
 
-def get_step_profile() -> dict[str, float]:
+def get_step_profile() -> Dict[str, float]:
     return dict(_STEP_PROFILE_MS)
 
 
 @contextlib.contextmanager
 def _profile_section(name: str, device: torch.device):
     enabled = os.environ.get("THERIA_MINIMAL_PROFILE_BUCKETS", "0") != "0" and device.type == "cuda"
+    # CUDA graph capture forbids sync/timing calls in captured regions.
+    if enabled and torch.cuda.is_current_stream_capturing():
+        yield
+        return
     if not enabled:
         yield
         return
@@ -380,6 +385,7 @@ def benchmark_backend(
     warmup_steps: int,
     bench_steps: int,
     symmetric_layout: bool = False,
+    cuda_graph: bool = False,
 ):
     """Benchmark one backend with forward+backward+optimizer updates."""
     torch.manual_seed(seed)
@@ -398,30 +404,63 @@ def benchmark_backend(
         backend=backend,
         symmetric_layout=symmetric_layout,
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    if device.type == "cuda" and cuda_graph:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, capturable=True)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     # Reuse one fixed batch to isolate model/optimizer compute cost.
     x, y = create_dummy_task(batch_size, seq_len, vocab_size, num_classes, device)
 
+    def _train_step_eager() -> float:
+        return train_step(model, x, y, optimizer)
+
     for _ in range(warmup_steps):
-        train_step(model, x, y, optimizer)
+        _train_step_eager()
 
     if device.type == "cuda":
-        torch.cuda.synchronize(device)
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        loss = 0.0
-        for _ in range(bench_steps):
-            loss = train_step(model, x, y, optimizer)
-        end.record()
-        torch.cuda.synchronize(device)
-        total_ms = float(start.elapsed_time(end))
+        if cuda_graph:
+            # Warm up on a side stream to stabilize kernels/allocator before capture.
+            warm_stream = torch.cuda.Stream(device=device)
+            with torch.cuda.stream(warm_stream):
+                for _ in range(5):
+                    _train_step_eager()
+            torch.cuda.synchronize(device)
+
+            graph = torch.cuda.CUDAGraph()
+            optimizer.zero_grad(set_to_none=True)
+            with torch.cuda.graph(graph):
+                logits = model(x)
+                loss_tensor = nn.functional.cross_entropy(logits, y)
+                loss_tensor.backward()
+                optimizer.step()
+
+            torch.cuda.synchronize(device)
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            for _ in range(bench_steps):
+                graph.replay()
+            end.record()
+            torch.cuda.synchronize(device)
+            total_ms = float(start.elapsed_time(end))
+            loss = float(loss_tensor.detach().item())
+        else:
+            torch.cuda.synchronize(device)
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            loss = 0.0
+            for _ in range(bench_steps):
+                loss = _train_step_eager()
+            end.record()
+            torch.cuda.synchronize(device)
+            total_ms = float(start.elapsed_time(end))
     else:
         t0 = time.perf_counter()
         loss = 0.0
         for _ in range(bench_steps):
-            loss = train_step(model, x, y, optimizer)
+            loss = _train_step_eager()
         total_ms = float((time.perf_counter() - t0) * 1000.0)
 
     return {
@@ -511,6 +550,11 @@ def main():
         action="store_true",
         help="Force identical QKV layout materialization for reference and Triton in benchmark mode",
     )
+    parser.add_argument(
+        "--bench-cuda-graph",
+        action="store_true",
+        help="Use CUDA Graph replay for benchmark timing (CUDA only)",
+    )
 
     args = parser.parse_args()
 
@@ -566,6 +610,7 @@ def main():
                 warmup_steps=args.bench_warmup,
                 bench_steps=args.bench_steps,
                 symmetric_layout=args.benchmark_symmetric_layout,
+                cuda_graph=args.bench_cuda_graph,
             )
             rows.append(row)
             print(
@@ -587,6 +632,7 @@ def main():
                         "warmup_steps",
                         "bench_steps",
                         "symmetric_layout",
+                        "cuda_graph",
                         "total_ms",
                         "ms_per_step",
                         "final_loss",
@@ -595,6 +641,7 @@ def main():
                 w.writeheader()
                 for row in rows:
                     row["symmetric_layout"] = int(args.benchmark_symmetric_layout)
+                    row["cuda_graph"] = int(args.bench_cuda_graph)
                 w.writerows(rows)
         return
 
