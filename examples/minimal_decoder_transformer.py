@@ -30,6 +30,9 @@ Usage:
     # Verbose mode (shows shapes and gradients):
     python examples/minimal_decoder_transformer.py --verbose
 
+    # Benchmark reference vs fully fused Triton:
+    python examples/minimal_decoder_transformer.py --benchmark-compare --device cuda
+
 Requirements:
 - CUDA GPU (for triton_full_fused backend)
 - theria installed (pip install -e .)
@@ -42,6 +45,8 @@ Design philosophy:
 """
 
 import argparse
+import csv
+import time
 import torch
 import torch.nn as nn
 from theria.attention.custom import sdpa_custom
@@ -84,12 +89,11 @@ class MultiHeadAttention(nn.Module):
     Multi-head self-attention using theria's fused backend.
 
     This implementation demonstrates proper reshaping for the fused attention kernel:
-    1. Project Q, K, V: (B, T, D) → (B, T, D)
-    2. Reshape for multi-head: (B, T, D) → (B, T, H, D//H)
-    3. Transpose for sdpa_custom: (B, T, H, D//H) → (B, H, T, D//H)
-    4. Apply contiguous() - REQUIRED for fused backend
-    5. Call sdpa_custom with shape (B, H, T, D//H)
-    6. Transpose back and reshape to (B, T, D)
+    1. Single fused projection: (B, T, D) -> (B, T, 3D)
+    2. Split into Q/K/V and reshape for multi-head
+    3. Transpose for sdpa_custom: (B, T, H, D//H) -> (B, H, T, D//H)
+    4. Call sdpa_custom with shape (B, H, T, D//H)
+    5. Transpose back and reshape to (B, T, D)
     """
 
     def __init__(self, d_model, n_heads, backend="triton_full_fused"):
@@ -101,10 +105,8 @@ class MultiHeadAttention(nn.Module):
         self.d_per_head = d_model // n_heads
         self.backend = backend
 
-        # Linear projections for Q, K, V
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
+        # Fused QKV projection cuts memory traffic and projection launch overhead.
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model)
 
         # Output projection
         self.out_proj = nn.Linear(d_model, d_model)
@@ -119,11 +121,13 @@ class MultiHeadAttention(nn.Module):
         """
         B, T, D = x.shape
 
-        # Project and reshape for multi-head
-        # (B, T, D) → (B, T, H, D//H)
-        q = self.q_proj(x).view(B, T, self.n_heads, self.d_per_head)
-        k = self.k_proj(x).view(B, T, self.n_heads, self.d_per_head)
-        v = self.v_proj(x).view(B, T, self.n_heads, self.d_per_head)
+        # Fused projection and split: (B, T, 3D) -> 3 x (B, T, D)
+        q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
+
+        # Reshape for multi-head: (B, T, D) -> (B, T, H, D//H)
+        q = q.view(B, T, self.n_heads, self.d_per_head)
+        k = k.view(B, T, self.n_heads, self.d_per_head)
+        v = v.view(B, T, self.n_heads, self.d_per_head)
 
         # Transpose to (B, H, T, D//H) - the format sdpa_custom expects
         # IMPORTANT: sdpa_custom expects (B, H, T, D) format where D is per-head dimension
@@ -131,19 +135,18 @@ class MultiHeadAttention(nn.Module):
         k = k.transpose(1, 2)  # (B, H, T, D//H)
         v = v.transpose(1, 2)  # (B, H, T, D//H)
 
-        # CRITICAL: Contiguous tensors required for fused backend
-        # Transpose operations create non-contiguous views
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
+        # CRITICAL: Contiguous tensors required for fused backend.
+        if self.backend == "triton_full_fused":
+            q = q.contiguous()
+            k = k.contiguous()
+            v = v.contiguous()
 
         # Call theria's fused attention
         attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
 
-        # CRITICAL: Ensure gradient contiguity for triton backward
-        # The transpose operations below create non-contiguous gradients in backward pass,
-        # but triton kernels require contiguous dout. This wrapper ensures contiguity.
-        attn_out = _ensure_contiguous_grad(attn_out)
+        # Triton backward kernels require contiguous dout.
+        if self.backend == "triton_full_fused":
+            attn_out = _ensure_contiguous_grad(attn_out)
 
         # Transpose back and reshape to (B, T, D)
         attn_out = attn_out.transpose(1, 2).contiguous()  # (B, T, H, D//H)
@@ -363,6 +366,75 @@ def train_step(model, x, y, optimizer):
     return loss.item()
 
 
+def benchmark_backend(
+    *,
+    backend: str,
+    device: torch.device,
+    seed: int,
+    d_model: int,
+    n_heads: int,
+    d_ff: int,
+    n_layers: int,
+    vocab_size: int,
+    num_classes: int,
+    seq_len: int,
+    batch_size: int,
+    lr: float,
+    warmup_steps: int,
+    bench_steps: int,
+):
+    """Benchmark one backend with forward+backward+optimizer updates."""
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(seed)
+
+    validate_fused_backend_constraints(d_model, n_heads, device.type, backend)
+
+    model = MinimalDecoderTransformer(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_heads=n_heads,
+        d_ff=d_ff,
+        n_layers=n_layers,
+        num_classes=num_classes,
+        backend=backend,
+    ).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # Reuse one fixed batch to isolate model/optimizer compute cost.
+    x, y = create_dummy_task(batch_size, seq_len, vocab_size, num_classes, device)
+
+    for _ in range(warmup_steps):
+        train_step(model, x, y, optimizer)
+
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        loss = 0.0
+        for _ in range(bench_steps):
+            loss = train_step(model, x, y, optimizer)
+        end.record()
+        torch.cuda.synchronize(device)
+        total_ms = float(start.elapsed_time(end))
+    else:
+        t0 = time.perf_counter()
+        loss = 0.0
+        for _ in range(bench_steps):
+            loss = train_step(model, x, y, optimizer)
+        total_ms = float((time.perf_counter() - t0) * 1000.0)
+
+    return {
+        "backend": backend,
+        "warmup_steps": warmup_steps,
+        "bench_steps": bench_steps,
+        "total_ms": total_ms,
+        "ms_per_step": total_ms / max(bench_steps, 1),
+        "final_loss": loss,
+    }
+
+
 def check_gradients(model, verbose=False):
     """Check that all parameters have gradients."""
     no_grad_params = []
@@ -427,6 +499,14 @@ def main():
     parser.add_argument("--device", type=str, default="cuda", help="Device (default: cuda)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--verbose", action="store_true", help="Print verbose debugging info")
+    parser.add_argument(
+        "--benchmark-compare",
+        action="store_true",
+        help="Run reference vs triton_full_fused speed comparison and exit",
+    )
+    parser.add_argument("--bench-warmup", type=int, default=10, help="Warmup steps for benchmark mode")
+    parser.add_argument("--bench-steps", type=int, default=100, help="Timed steps for benchmark mode")
+    parser.add_argument("--bench-csv", type=str, default=None, help="Optional CSV output path for benchmark rows")
 
     args = parser.parse_args()
 
@@ -455,6 +535,59 @@ def main():
         validate_fused_backend_constraints(args.d_model, args.n_heads, args.device, args.backend)
     except ValueError as e:
         print(f"\n❌ Constraint violation: {e}")
+        return
+
+    if args.benchmark_compare:
+        if args.device != "cuda":
+            print("\n❌ Benchmark compare requires --device cuda")
+            return
+
+        print("\nRunning benchmark comparison (forward+backward+optimizer)...")
+        backends = ["reference", "triton_full_fused"]
+        rows = []
+        for backend in backends:
+            row = benchmark_backend(
+                backend=backend,
+                device=device,
+                seed=args.seed,
+                d_model=args.d_model,
+                n_heads=args.n_heads,
+                d_ff=args.d_ff,
+                n_layers=args.n_layers,
+                vocab_size=args.vocab_size,
+                num_classes=args.num_classes,
+                seq_len=args.seq_len,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                warmup_steps=args.bench_warmup,
+                bench_steps=args.bench_steps,
+            )
+            rows.append(row)
+            print(
+                f"{backend:18s} total_ms={row['total_ms']:.3f} "
+                f"ms_per_step={row['ms_per_step']:.3f} final_loss={row['final_loss']:.4f}"
+            )
+
+        ref = next(r for r in rows if r["backend"] == "reference")
+        tri = next(r for r in rows if r["backend"] == "triton_full_fused")
+        speedup = ref["ms_per_step"] / max(tri["ms_per_step"], 1e-12)
+        print(f"\nSpeedup (reference / triton_full_fused): {speedup:.3f}x")
+
+        if args.bench_csv:
+            with open(args.bench_csv, "w", newline="") as f:
+                w = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "backend",
+                        "warmup_steps",
+                        "bench_steps",
+                        "total_ms",
+                        "ms_per_step",
+                        "final_loss",
+                    ],
+                )
+                w.writeheader()
+                w.writerows(rows)
         return
 
     # Create model
