@@ -1,0 +1,13 @@
+name: theria-gpu
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - pytorch-cuda=12.1
+  - triton
+  - numpy
+  - pytest
+  - einops

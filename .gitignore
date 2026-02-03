@@ -5,3 +5,9 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+artifacts/
+experiments/phase10/runs/
+artifacts/
+experiments/phase11/runs/*_k*.csv
+experiments/phase12/runs/

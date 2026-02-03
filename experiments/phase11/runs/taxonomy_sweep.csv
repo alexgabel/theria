@@ -1,0 +1,205 @@
+wrapper,attention_backend,inner_steps,seed,steps,status,second_order_path_all,second_order_path_any,second_order_path_attn_all,second_order_path_attn_any,second_order_path_head_all,second_order_path_head_any,sdpa_input_gradgrad_ok,rel_diff_mean,grad_norm_q_proj,grad_norm_k_proj,grad_norm_v_proj,error
+baseline,reference,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+baseline,reference,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+baseline,reference,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922204971313477,31.833553314208984,
+baseline,reference,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+baseline,custom,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+baseline,custom,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+baseline,custom,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922203063964844,31.833553314208984,
+baseline,custom,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+baseline,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+baseline,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+baseline,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+baseline,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_attention_output,reference,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+detach_attention_output,reference,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+detach_attention_output,reference,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+detach_attention_output,reference,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+detach_attention_output,custom,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+detach_attention_output,custom,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+detach_attention_output,custom,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+detach_attention_output,custom,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+detach_attention_output,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+detach_attention_output,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+detach_attention_output,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+detach_attention_output,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+detach_q_input,reference,1,0,1,OK,True,True,True,True,True,True,True,0.122306,0.0,4.13361930847168,13.995824813842773,
+detach_q_input,reference,5,0,1,OK,True,True,True,True,True,True,True,0.545914,0.0,16.510986328125,21.54529571533203,
+detach_q_input,reference,10,0,1,OK,True,True,True,True,True,True,True,0.642147,0.0,27.290348052978516,26.604665756225586,
+detach_q_input,reference,20,0,1,OK,True,True,True,True,True,True,True,0.640450,0.0,29.36614418029785,21.13768768310547,
+detach_q_input,custom,1,0,1,OK,True,True,True,True,True,True,True,0.122306,0.0,4.13361930847168,13.995824813842773,
+detach_q_input,custom,5,0,1,OK,True,True,True,True,True,True,True,0.545914,0.0,16.510988235473633,21.54529571533203,
+detach_q_input,custom,10,0,1,OK,True,True,True,True,True,True,True,0.642147,0.0,27.290348052978516,26.604663848876953,
+detach_q_input,custom,20,0,1,OK,True,True,True,True,True,True,True,0.640450,0.0,29.36614418029785,21.13768768310547,
+detach_q_input,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input,reference,1,0,1,OK,True,True,True,True,True,True,True,0.124886,4.225643157958984,0.0,13.999256134033203,
+detach_k_input,reference,5,0,1,OK,True,True,True,True,True,True,True,0.537938,16.6179256439209,0.0,21.874431610107422,
+detach_k_input,reference,10,0,1,OK,True,True,True,True,True,True,True,0.690473,32.50421142578125,0.0,31.25969696044922,
+detach_k_input,reference,20,0,1,OK,True,True,True,True,True,True,True,0.684056,30.34269905090332,0.0,21.866670608520508,
+detach_k_input,custom,1,0,1,OK,True,True,True,True,True,True,True,0.124886,4.225643157958984,0.0,13.999256134033203,
+detach_k_input,custom,5,0,1,OK,True,True,True,True,True,True,True,0.537938,16.6179256439209,0.0,21.874431610107422,
+detach_k_input,custom,10,0,1,OK,True,True,True,True,True,True,True,0.690473,32.50421142578125,0.0,31.25969696044922,
+detach_k_input,custom,20,0,1,OK,True,True,True,True,True,True,True,0.684056,30.34269905090332,0.0,21.866670608520508,
+detach_k_input,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input,reference,1,0,1,OK,True,True,True,True,True,True,True,0.088416,3.678349733352661,3.5743770599365234,0.0,
+detach_v_input,reference,5,0,1,OK,True,True,True,True,True,True,True,0.445493,7.550971031188965,7.463386535644531,0.0,
+detach_v_input,reference,10,0,1,OK,True,True,True,True,True,True,True,0.835929,24.090782165527344,24.029632568359375,0.0,
+detach_v_input,reference,20,0,1,OK,True,True,True,True,True,True,True,0.945957,54.83182907104492,57.82924270629883,0.0,
+detach_v_input,custom,1,0,1,OK,True,True,True,True,True,True,True,0.088416,3.678349733352661,3.5743770599365234,0.0,
+detach_v_input,custom,5,0,1,OK,True,True,True,True,True,True,True,0.445493,7.550971031188965,7.463386535644531,0.0,
+detach_v_input,custom,10,0,1,OK,True,True,True,True,True,True,True,0.835929,24.090782165527344,24.029632568359375,0.0,
+detach_v_input,custom,20,0,1,OK,True,True,True,True,True,True,True,0.945957,54.83182907104492,57.82924270629883,0.0,
+detach_v_input,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input_strict,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_q_input_strict,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_q_input_strict,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_q_input_strict,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_q_input_strict,custom,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_q_input_strict,custom,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_q_input_strict,custom,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_q_input_strict,custom,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_q_input_strict,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input_strict,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input_strict,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_q_input_strict,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input_strict,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_k_input_strict,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_k_input_strict,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_k_input_strict,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_k_input_strict,custom,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_k_input_strict,custom,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_k_input_strict,custom,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_k_input_strict,custom,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_k_input_strict,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input_strict,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input_strict,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_k_input_strict,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input_strict,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_v_input_strict,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_v_input_strict,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_v_input_strict,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,True,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+detach_v_input_strict,custom,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_v_input_strict,custom,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_v_input_strict,custom,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_v_input_strict,custom,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,One of the differentiated Tensors does not require grad
+detach_v_input_strict,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input_strict,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input_strict,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+detach_v_input_strict,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,reference,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+checkpoint_attention,reference,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+checkpoint_attention,reference,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922204971313477,31.833553314208984,
+checkpoint_attention,reference,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+checkpoint_attention,custom,1,0,1,OK,True,True,True,True,True,True,True,0.144946,4.218088150024414,4.127514839172363,13.990406036376953,
+checkpoint_attention,custom,5,0,1,OK,True,True,True,True,True,True,True,0.630858,18.812213897705078,17.973539352416992,24.673471450805664,
+checkpoint_attention,custom,10,0,1,OK,True,True,True,True,True,True,True,0.708650,35.47654724121094,29.922203063964844,31.833553314208984,
+checkpoint_attention,custom,20,0,1,OK,True,True,True,True,True,True,True,0.728491,42.726112365722656,35.312416076660156,26.911224365234375,
+checkpoint_attention,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_attention,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,True,,,,,
+checkpoint_no_grad,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,custom,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+checkpoint_no_grad,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_no_grad,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,reference,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+checkpoint_detach_recompute,reference,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,1,0,1,OK,True,True,False,False,True,True,False,0.059529,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,5,0,1,OK,True,True,False,False,True,True,False,0.341524,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,10,0,1,OK,True,True,False,False,True,True,False,0.703218,0.0,0.0,0.0,
+checkpoint_detach_recompute,custom,20,0,1,OK,True,True,False,False,True,True,False,1.071961,0.0,0.0,0.0,
+checkpoint_detach_recompute,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+checkpoint_detach_recompute,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+recompute_logits_no_grad_sdpa,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,custom,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,custom,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,custom,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,custom,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,triton_fused,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,triton_fused,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,triton_fused,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+recompute_logits_no_grad_sdpa,triton_fused,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+backward_detach_logits_sim,reference,1,0,1,OK,True,True,True,True,True,True,False,0.082561,0.0,0.0,14.058921813964844,
+backward_detach_logits_sim,reference,5,0,1,OK,True,True,True,True,True,True,False,0.365433,0.0,0.0,18.96563720703125,
+backward_detach_logits_sim,reference,10,0,1,OK,True,True,True,True,True,True,False,0.519396,0.0,0.0,23.24574851989746,
+backward_detach_logits_sim,reference,20,0,1,OK,True,True,True,True,True,True,False,0.609372,0.0,0.0,23.52641487121582,
+backward_detach_logits_sim,custom,1,0,1,OK,True,True,True,True,True,True,False,0.082561,0.0,0.0,14.058921813964844,
+backward_detach_logits_sim,custom,5,0,1,OK,True,True,True,True,True,True,False,0.365433,0.0,0.0,18.96563720703125,
+backward_detach_logits_sim,custom,10,0,1,OK,True,True,True,True,True,True,False,0.519396,0.0,0.0,23.24574851989746,
+backward_detach_logits_sim,custom,20,0,1,OK,True,True,True,True,True,True,False,0.609372,0.0,0.0,23.52641487121582,
+backward_detach_logits_sim,triton_fused,1,0,1,OK,True,True,True,True,True,True,False,0.082561,0.0,0.0,14.058921813964844,
+backward_detach_logits_sim,triton_fused,5,0,1,OK,True,True,True,True,True,True,False,0.365433,0.0,0.0,18.96563720703125,
+backward_detach_logits_sim,triton_fused,10,0,1,OK,True,True,True,True,True,True,False,0.519396,0.0,0.0,23.24574851989746,
+backward_detach_logits_sim,triton_fused,20,0,1,OK,True,True,True,True,True,True,False,0.609372,0.0,0.0,23.52641487121582,
+no_grad_attention,reference,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,reference,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,reference,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,reference,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,custom,1,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,custom,5,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,custom,10,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,custom,20,0,1,HARD_FAIL_UNUSED,,,,,,,False,,,,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+no_grad_attention,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+no_grad_attention,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+no_grad_attention,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+no_grad_attention,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+once_differentiable_sim,reference,1,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,reference,5,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,reference,10,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,reference,20,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,custom,1,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,custom,5,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,custom,10,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,custom,20,0,1,HARD_FAIL_ONCE_DIFF,,,,,,,False,,,,,trying to differentiate twice a function that was marked with @once_differentiable
+once_differentiable_sim,triton_fused,1,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+once_differentiable_sim,triton_fused,5,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+once_differentiable_sim,triton_fused,10,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+once_differentiable_sim,triton_fused,20,0,1,HARD_FAIL_OTHER,,,,,,,False,,,,,
+stats_detach_logits_sdpa,reference,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_logits_sdpa,reference,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_logits_sdpa,reference,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_logits_sdpa,reference,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,
+stats_detach_logits_sdpa,custom,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_logits_sdpa,custom,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_logits_sdpa,custom,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_logits_sdpa,custom,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,
+stats_detach_logits_sdpa,triton_fused,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_logits_sdpa,triton_fused,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_logits_sdpa,triton_fused,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_logits_sdpa,triton_fused,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,
+stats_detach_softmax_output_sdpa,reference,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_softmax_output_sdpa,reference,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_softmax_output_sdpa,reference,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_softmax_output_sdpa,reference,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,
+stats_detach_softmax_output_sdpa,custom,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_softmax_output_sdpa,custom,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_softmax_output_sdpa,custom,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_softmax_output_sdpa,custom,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,
+stats_detach_softmax_output_sdpa,triton_fused,1,0,1,OK,True,True,True,True,True,True,False,0.095218,0.0,0.0,14.004790306091309,
+stats_detach_softmax_output_sdpa,triton_fused,5,0,1,OK,True,True,True,True,True,True,False,0.413083,0.0,0.0,19.306520462036133,
+stats_detach_softmax_output_sdpa,triton_fused,10,0,1,OK,True,True,True,True,True,True,False,0.542502,0.0,0.0,23.63087272644043,
+stats_detach_softmax_output_sdpa,triton_fused,20,0,1,OK,True,True,True,True,True,True,False,0.603991,0.0,0.0,23.22555160522461,

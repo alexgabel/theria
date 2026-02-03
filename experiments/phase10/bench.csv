@@ -1,0 +1,2 @@
+backend,mode,device,inner_steps,inner_lr,warmup_steps,bench_steps,total_ms,ms_per_step
+triton_fused,FULL,cuda,5,0.1,10,50,524.011658,10.480233

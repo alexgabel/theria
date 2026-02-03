@@ -1,0 +1,107 @@
+source_file,wrapper,attention_backend,inner_steps,status,second_order_path_any,second_order_path_attn_any,second_order_path_head_any,sdpa_input_gradgrad_ok,rel_diff_mean,error
+bad_backend_diagnostics_custom.csv,baseline,custom,,OK,True,True,True,True,0.573209,
+bad_backend_custom_k1.csv,baseline,custom,1,OK,True,True,True,True,0.144946,
+bad_backend_custom_k10.csv,baseline,custom,10,OK,True,True,True,True,0.708650,
+bad_backend_custom_k20.csv,baseline,custom,20,OK,True,True,True,True,0.728491,
+bad_backend_custom_k5.csv,baseline,custom,5,OK,True,True,True,True,0.630858,
+bad_backend_diagnostics_custom.csv,detach_attention_output,custom,,OK,True,False,True,False,0.246468,
+bad_backend_custom_k1.csv,detach_attention_output,custom,1,OK,True,False,True,False,0.059529,
+bad_backend_custom_k10.csv,detach_attention_output,custom,10,OK,True,False,True,False,0.703218,
+bad_backend_custom_k20.csv,detach_attention_output,custom,20,OK,True,False,True,False,1.071961,
+bad_backend_custom_k5.csv,detach_attention_output,custom,5,OK,True,False,True,False,0.341524,
+bad_backend_custom_k1.csv,detach_k_input,custom,1,OK,True,True,True,True,0.124886,
+bad_backend_custom_k10.csv,detach_k_input,custom,10,OK,True,True,True,True,0.690473,
+bad_backend_custom_k20.csv,detach_k_input,custom,20,OK,True,True,True,True,0.684056,
+bad_backend_custom_k5.csv,detach_k_input,custom,5,OK,True,True,True,True,0.537938,
+bad_backend_custom_k1.csv,detach_q_input,custom,1,OK,True,True,True,True,0.122306,
+bad_backend_custom_k10.csv,detach_q_input,custom,10,OK,True,True,True,True,0.642147,
+bad_backend_custom_k20.csv,detach_q_input,custom,20,OK,True,True,True,True,0.640450,
+bad_backend_custom_k5.csv,detach_q_input,custom,5,OK,True,True,True,True,0.545914,
+bad_backend_custom_k1.csv,detach_v_input,custom,1,OK,True,True,True,True,0.088416,
+bad_backend_custom_k10.csv,detach_v_input,custom,10,OK,True,True,True,True,0.835929,
+bad_backend_custom_k20.csv,detach_v_input,custom,20,OK,True,True,True,True,0.945957,
+bad_backend_custom_k5.csv,detach_v_input,custom,5,OK,True,True,True,True,0.445493,
+bad_backend_diagnostics_custom.csv,no_grad_attention,custom,,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_custom_k1.csv,no_grad_attention,custom,1,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_custom_k10.csv,no_grad_attention,custom,10,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_custom_k20.csv,no_grad_attention,custom,20,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_custom_k5.csv,no_grad_attention,custom,5,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_diagnostics_custom.csv,once_differentiable_sim,custom,,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_custom_k1.csv,once_differentiable_sim,custom,1,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_custom_k10.csv,once_differentiable_sim,custom,10,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_custom_k20.csv,once_differentiable_sim,custom,20,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_custom_k5.csv,once_differentiable_sim,custom,5,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_diagnostics_custom.csv,stats_detach_logits_sdpa,custom,,OK,True,True,True,False,0.362581,
+bad_backend_custom_k1.csv,stats_detach_logits_sdpa,custom,1,OK,True,True,True,False,0.095218,
+bad_backend_custom_k10.csv,stats_detach_logits_sdpa,custom,10,OK,True,True,True,False,0.542502,
+bad_backend_custom_k20.csv,stats_detach_logits_sdpa,custom,20,OK,True,True,True,False,0.603991,
+bad_backend_custom_k5.csv,stats_detach_logits_sdpa,custom,5,OK,True,True,True,False,0.413083,
+bad_backend_diagnostics_custom.csv,stats_detach_softmax_output_sdpa,custom,,OK,True,True,True,False,0.362581,
+bad_backend_custom_k1.csv,stats_detach_softmax_output_sdpa,custom,1,OK,True,True,True,False,0.095218,
+bad_backend_custom_k10.csv,stats_detach_softmax_output_sdpa,custom,10,OK,True,True,True,False,0.542502,
+bad_backend_custom_k20.csv,stats_detach_softmax_output_sdpa,custom,20,OK,True,True,True,False,0.603991,
+bad_backend_custom_k5.csv,stats_detach_softmax_output_sdpa,custom,5,OK,True,True,True,False,0.413083,
+bad_backend_diagnostics.csv,baseline,reference,,OK,True,True,True,True,0.144946,
+bad_backend_reference_k1.csv,baseline,reference,1,OK,True,True,True,True,0.144946,
+partial_baseline_reference_k1.csv,baseline,reference,1,OK,True,True,True,True,0.144946,
+bad_backend_reference_k10.csv,baseline,reference,10,OK,True,True,True,True,0.708650,
+partial_baseline_reference_k10.csv,baseline,reference,10,OK,True,True,True,True,0.708650,
+bad_backend_reference_k20.csv,baseline,reference,20,OK,True,True,True,True,0.728491,
+partial_baseline_reference_k20.csv,baseline,reference,20,OK,True,True,True,True,0.728491,
+bad_backend_reference_k5.csv,baseline,reference,5,OK,True,True,True,True,0.630858,
+partial_baseline_reference_k5.csv,baseline,reference,5,OK,True,True,True,True,0.630858,
+bad_backend_diagnostics.csv,detach_attention_output,reference,,OK,True,False,True,False,0.059529,
+bad_backend_reference_k1.csv,detach_attention_output,reference,1,OK,True,False,True,False,0.059529,
+bad_backend_reference_k10.csv,detach_attention_output,reference,10,OK,True,False,True,False,0.703218,
+bad_backend_reference_k20.csv,detach_attention_output,reference,20,OK,True,False,True,False,1.071961,
+bad_backend_reference_k5.csv,detach_attention_output,reference,5,OK,True,False,True,False,0.341524,
+bad_backend_reference_k1.csv,detach_k_input,reference,1,OK,True,True,True,True,0.124886,
+partial_detach_k_input_reference_k1.csv,detach_k_input,reference,1,OK,True,True,True,True,0.124886,
+bad_backend_reference_k10.csv,detach_k_input,reference,10,OK,True,True,True,True,0.690473,
+partial_detach_k_input_reference_k10.csv,detach_k_input,reference,10,OK,True,True,True,True,0.690473,
+bad_backend_reference_k20.csv,detach_k_input,reference,20,OK,True,True,True,True,0.684056,
+partial_detach_k_input_reference_k20.csv,detach_k_input,reference,20,OK,True,True,True,True,0.684056,
+bad_backend_reference_k5.csv,detach_k_input,reference,5,OK,True,True,True,True,0.537938,
+partial_detach_k_input_reference_k5.csv,detach_k_input,reference,5,OK,True,True,True,True,0.537938,
+bad_backend_reference_k1.csv,detach_q_input,reference,1,OK,True,True,True,True,0.122306,
+partial_detach_q_input_reference_k1.csv,detach_q_input,reference,1,OK,True,True,True,True,0.122306,
+bad_backend_reference_k10.csv,detach_q_input,reference,10,OK,True,True,True,True,0.642147,
+partial_detach_q_input_reference_k10.csv,detach_q_input,reference,10,OK,True,True,True,True,0.642147,
+bad_backend_reference_k20.csv,detach_q_input,reference,20,OK,True,True,True,True,0.640450,
+partial_detach_q_input_reference_k20.csv,detach_q_input,reference,20,OK,True,True,True,True,0.640450,
+bad_backend_reference_k5.csv,detach_q_input,reference,5,OK,True,True,True,True,0.545914,
+partial_detach_q_input_reference_k5.csv,detach_q_input,reference,5,OK,True,True,True,True,0.545914,
+bad_backend_reference_k1.csv,detach_v_input,reference,1,OK,True,True,True,True,0.088416,
+partial_detach_v_input_reference_k1.csv,detach_v_input,reference,1,OK,True,True,True,True,0.088416,
+bad_backend_reference_k10.csv,detach_v_input,reference,10,OK,True,True,True,True,0.835929,
+partial_detach_v_input_reference_k10.csv,detach_v_input,reference,10,OK,True,True,True,True,0.835929,
+bad_backend_reference_k20.csv,detach_v_input,reference,20,OK,True,True,True,True,0.945957,
+partial_detach_v_input_reference_k20.csv,detach_v_input,reference,20,OK,True,True,True,True,0.945957,
+bad_backend_reference_k5.csv,detach_v_input,reference,5,OK,True,True,True,True,0.445493,
+partial_detach_v_input_reference_k5.csv,detach_v_input,reference,5,OK,True,True,True,True,0.445493,
+bad_backend_diagnostics.csv,no_grad_attention,reference,,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_reference_k1.csv,no_grad_attention,reference,1,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_reference_k10.csv,no_grad_attention,reference,10,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_reference_k20.csv,no_grad_attention,reference,20,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_reference_k5.csv,no_grad_attention,reference,5,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_diagnostics.csv,once_differentiable_sim,reference,,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_reference_k1.csv,once_differentiable_sim,reference,1,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_reference_k10.csv,once_differentiable_sim,reference,10,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_reference_k20.csv,once_differentiable_sim,reference,20,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_reference_k5.csv,once_differentiable_sim,reference,5,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_diagnostics.csv,stats_detach_logits_sdpa,reference,,OK,True,True,True,False,0.095218,
+bad_backend_reference_k1.csv,stats_detach_logits_sdpa,reference,1,OK,True,True,True,False,0.095218,
+bad_backend_reference_k10.csv,stats_detach_logits_sdpa,reference,10,OK,True,True,True,False,0.542502,
+bad_backend_reference_k20.csv,stats_detach_logits_sdpa,reference,20,OK,True,True,True,False,0.603991,
+bad_backend_reference_k5.csv,stats_detach_logits_sdpa,reference,5,OK,True,True,True,False,0.413083,
+bad_backend_diagnostics.csv,stats_detach_softmax_output_sdpa,reference,,OK,True,True,True,False,0.095218,
+bad_backend_reference_k1.csv,stats_detach_softmax_output_sdpa,reference,1,OK,True,True,True,False,0.095218,
+bad_backend_reference_k10.csv,stats_detach_softmax_output_sdpa,reference,10,OK,True,True,True,False,0.542502,
+bad_backend_reference_k20.csv,stats_detach_softmax_output_sdpa,reference,20,OK,True,True,True,False,0.603991,
+bad_backend_reference_k5.csv,stats_detach_softmax_output_sdpa,reference,5,OK,True,True,True,False,0.413083,
+bad_backend_diagnostics_triton.csv,baseline,triton_fused,,OK,True,True,True,True,0.372356,
+bad_backend_diagnostics_triton.csv,detach_attention_output,triton_fused,,OK,True,False,True,False,0.265505,
+bad_backend_diagnostics_triton.csv,no_grad_attention,triton_fused,,HARD_FAIL_UNUSED,,,,False,,One of the differentiated Tensors appears to not have been used in the graph. Set allow_unused=True if this is the desired behavior.
+bad_backend_diagnostics_triton.csv,once_differentiable_sim,triton_fused,,HARD_FAIL_ONCE_DIFF,,,,False,,trying to differentiate twice a function that was marked with @once_differentiable
+bad_backend_diagnostics_triton.csv,stats_detach_logits_sdpa,triton_fused,,OK,True,True,True,False,0.369994,
+bad_backend_diagnostics_triton.csv,stats_detach_softmax_output_sdpa,triton_fused,,OK,True,True,True,False,0.369994,
