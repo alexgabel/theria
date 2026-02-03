@@ -45,11 +45,44 @@ Design philosophy:
 """
 
 import argparse
+import contextlib
 import csv
+import os
 import time
 import torch
 import torch.nn as nn
 from theria.attention.custom import sdpa_custom
+
+_STEP_PROFILE_MS = {
+    "embed_norm_ffn_ms": 0.0,
+    "qkv_reshape_ms": 0.0,
+    "sdpa_fwd_ms": 0.0,
+    "optimizer_ms": 0.0,
+}
+
+
+def reset_step_profile() -> None:
+    for k in _STEP_PROFILE_MS:
+        _STEP_PROFILE_MS[k] = 0.0
+
+
+def get_step_profile() -> dict[str, float]:
+    return dict(_STEP_PROFILE_MS)
+
+
+@contextlib.contextmanager
+def _profile_section(name: str, device: torch.device):
+    enabled = os.environ.get("THERIA_MINIMAL_PROFILE_BUCKETS", "0") != "0" and device.type == "cuda"
+    if not enabled:
+        yield
+        return
+    torch.cuda.synchronize(device)
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        torch.cuda.synchronize(device)
+        _STEP_PROFILE_MS[name] += (time.perf_counter() - t0) * 1000.0
 
 
 class MultiHeadAttention(nn.Module):
@@ -92,21 +125,25 @@ class MultiHeadAttention(nn.Module):
 
         # Shared QKV layout path for all backends.
         # Optional contiguous materialization makes benchmark prep symmetric.
-        qkv = self.qkv_proj(x).view(B, T, 3, self.n_heads, self.d_per_head)
-        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, H, T, Dh)
-        if self.backend == "triton_full_fused" or self.symmetric_layout:
-            qkv = qkv.contiguous()
-        q, k, v = qkv.unbind(0)  # each: (B, H, T, Dh)
+        with _profile_section("qkv_reshape_ms", x.device):
+            qkv = self.qkv_proj(x).view(B, T, 3, self.n_heads, self.d_per_head)
+            qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, H, T, Dh)
+            if self.backend == "triton_full_fused" or self.symmetric_layout:
+                qkv = qkv.contiguous()
+            q, k, v = qkv.unbind(0)  # each: (B, H, T, Dh)
 
         # Call theria's fused attention
-        attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
+        with _profile_section("sdpa_fwd_ms", x.device):
+            attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
 
-        # Transpose back and reshape to (B, T, D)
-        attn_out = attn_out.transpose(1, 2).contiguous()  # (B, T, H, D//H)
-        attn_out = attn_out.reshape(B, T, D)  # (B, T, D)
+        with _profile_section("qkv_reshape_ms", x.device):
+            # Transpose back and reshape to (B, T, D)
+            attn_out = attn_out.transpose(1, 2).contiguous()  # (B, T, H, D//H)
+            attn_out = attn_out.reshape(B, T, D)  # (B, T, D)
 
-        # Output projection
-        return self.out_proj(attn_out)
+            # Output projection
+            attn_out = self.out_proj(attn_out)
+        return attn_out
 
 
 class FeedForward(nn.Module):
@@ -144,10 +181,13 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x):
         # Pre-norm: LayerNorm before attention
-        x = x + self.attn(self.norm1(x))
+        with _profile_section("embed_norm_ffn_ms", x.device):
+            norm1_out = self.norm1(x)
+        x = x + self.attn(norm1_out)
 
         # Pre-norm: LayerNorm before feedforward
-        x = x + self.ff(self.norm2(x))
+        with _profile_section("embed_norm_ffn_ms", x.device):
+            x = x + self.ff(self.norm2(x))
 
         return x
 
@@ -201,15 +241,17 @@ class MinimalDecoderTransformer(nn.Module):
         Returns:
             Logits of shape (B, num_classes)
         """
-        # Embed tokens: (B, T) → (B, T, D)
-        x = self.token_embed(x)
+        # Embed tokens: (B, T) -> (B, T, D)
+        with _profile_section("embed_norm_ffn_ms", x.device):
+            x = self.token_embed(x)
 
         # Apply transformer blocks
         for block in self.blocks:
             x = block(x)
 
         # Final layer norm
-        x = self.norm(x)
+        with _profile_section("embed_norm_ffn_ms", x.device):
+            x = self.norm(x)
 
         # Pool using token 0 (like BERT [CLS])
         x = x[:, 0, :]  # (B, D)
@@ -316,7 +358,8 @@ def train_step(model, x, y, optimizer):
     logits = model(x)
     loss = nn.functional.cross_entropy(logits, y)
     loss.backward()
-    optimizer.step()
+    with _profile_section("optimizer_ms", x.device):
+        optimizer.step()
     return loss.item()
 
 

@@ -77,6 +77,10 @@ def _run_attention_breakdown_onpath(
     )
 
     prior_profile_env = os.environ.get("THERIA_SDPA_PROFILE_BWD", "0")
+    prior_bucket_env = os.environ.get("THERIA_MINIMAL_PROFILE_BUCKETS", "0")
+    os.environ["THERIA_MINIMAL_PROFILE_BUCKETS"] = "1"
+
+    minimal.reset_step_profile()
     os.environ["THERIA_SDPA_PROFILE_BWD"] = "0"
     ref = minimal.benchmark_backend(
         backend="reference",
@@ -95,7 +99,9 @@ def _run_attention_breakdown_onpath(
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
     )
+    ref_buckets = minimal.get_step_profile()
 
+    minimal.reset_step_profile()
     reset_triton_sdpa_bwd_profile()
     os.environ["THERIA_SDPA_PROFILE_BWD"] = "1"
     tri = minimal.benchmark_backend(
@@ -115,8 +121,10 @@ def _run_attention_breakdown_onpath(
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
     )
+    tri_buckets = minimal.get_step_profile()
     profile = get_triton_sdpa_bwd_profile()
     os.environ["THERIA_SDPA_PROFILE_BWD"] = prior_profile_env
+    os.environ["THERIA_MINIMAL_PROFILE_BUCKETS"] = prior_bucket_env
 
     calls = max(int(profile.get("calls", 0)), 1)
     delta_ms = float(profile.get("delta_ms_sum", 0.0)) / calls
@@ -126,7 +134,19 @@ def _run_attention_breakdown_onpath(
     bwd_total_ms = float(profile.get("total_bwd_ms_sum", 0.0)) / calls
     ref_ms = float(ref["ms_per_step"])
     tri_ms = float(tri["ms_per_step"])
-    kernel_sum = delta_ms + dq_ms + dk_dv_ms + shared_ms
+    ref_sdpa_fwd_ms = float(ref_buckets.get("sdpa_fwd_ms", 0.0)) / max(steps, 1)
+    tri_sdpa_fwd_ms = float(tri_buckets.get("sdpa_fwd_ms", 0.0)) / max(steps, 1)
+    ref_embed_norm_ffn_ms = float(ref_buckets.get("embed_norm_ffn_ms", 0.0)) / max(steps, 1)
+    tri_embed_norm_ffn_ms = float(tri_buckets.get("embed_norm_ffn_ms", 0.0)) / max(steps, 1)
+    ref_qkv_reshape_ms = float(ref_buckets.get("qkv_reshape_ms", 0.0)) / max(steps, 1)
+    tri_qkv_reshape_ms = float(tri_buckets.get("qkv_reshape_ms", 0.0)) / max(steps, 1)
+    ref_optimizer_ms = float(ref_buckets.get("optimizer_ms", 0.0)) / max(steps, 1)
+    tri_optimizer_ms = float(tri_buckets.get("optimizer_ms", 0.0)) / max(steps, 1)
+
+    triton_sdpa_total_ms = tri_sdpa_fwd_ms + bwd_total_ms
+    reference_sdpa_total_ms = ref_sdpa_fwd_ms
+    triton_non_sdpa_ms = tri_ms - triton_sdpa_total_ms
+    reference_non_sdpa_ms = ref_ms - reference_sdpa_total_ms
 
     return {
         "reference_step_total_ms": ref_ms,
@@ -137,8 +157,18 @@ def _run_attention_breakdown_onpath(
         "dq_ms": dq_ms,
         "dk_dv_ms": dk_dv_ms,
         "shared_ms": shared_ms,
-        "kernel_sum_ms": kernel_sum,
-        "integration_other_ms": tri_ms - kernel_sum,
+        "reference_sdpa_fwd_ms_per_step": ref_sdpa_fwd_ms,
+        "triton_sdpa_fwd_ms_per_step": tri_sdpa_fwd_ms,
+        "reference_sdpa_total_ms_per_step": reference_sdpa_total_ms,
+        "triton_sdpa_total_ms_per_step": triton_sdpa_total_ms,
+        "reference_non_sdpa_ms_per_step": reference_non_sdpa_ms,
+        "triton_non_sdpa_ms_per_step": triton_non_sdpa_ms,
+        "reference_embed_norm_ffn_ms_per_step": ref_embed_norm_ffn_ms,
+        "triton_embed_norm_ffn_ms_per_step": tri_embed_norm_ffn_ms,
+        "reference_qkv_reshape_ms_per_step": ref_qkv_reshape_ms,
+        "triton_qkv_reshape_ms_per_step": tri_qkv_reshape_ms,
+        "reference_optimizer_ms_per_step": ref_optimizer_ms,
+        "triton_optimizer_ms_per_step": tri_optimizer_ms,
         "delta_vs_reference_ms": tri_ms - ref_ms,
     }
 
@@ -284,16 +314,43 @@ def main() -> None:
     print(f"reference step_total_ms={breakdown['reference_step_total_ms']:.4f}")
     print(f"triton step_total_ms={breakdown['triton_step_total_ms']:.4f}")
     print(
-        "  delta_ms={dlt:.4f} dq_ms={dq:.4f} dk_dv_ms={dkdv:.4f} shared_ms={sh:.4f}  (sum={sm:.4f})".format(
+        "  reference: sdpa_fwd_ms_per_step={rf:.4f} sdpa_total_ms_per_step={rst:.4f} non_sdpa_ms_per_step={rn:.4f}".format(
+            rf=breakdown["reference_sdpa_fwd_ms_per_step"],
+            rst=breakdown["reference_sdpa_total_ms_per_step"],
+            rn=breakdown["reference_non_sdpa_ms_per_step"],
+        )
+    )
+    print(
+        "  triton:    sdpa_fwd_ms_per_step={tf:.4f} sdpa_bwd_ms_per_step={tb:.4f} "
+        "sdpa_total_ms_per_step={tst:.4f} non_sdpa_ms_per_step={tn:.4f}".format(
+            tf=breakdown["triton_sdpa_fwd_ms_per_step"],
+            tb=breakdown["bwd_total_ms"],
+            tst=breakdown["triton_sdpa_total_ms_per_step"],
+            tn=breakdown["triton_non_sdpa_ms_per_step"],
+        )
+    )
+    print(
+        "  triton_bwd_split: delta_ms={dlt:.4f} dq_ms={dq:.4f} dk_dv_ms={dkdv:.4f} shared_ms={sh:.4f}".format(
             dlt=breakdown["delta_path_ms"],
             dq=breakdown["dq_ms"],
             dkdv=breakdown["dk_dv_ms"],
             sh=breakdown["shared_ms"],
-            sm=breakdown["kernel_sum_ms"],
+        )
+    )
+    print(
+        "  model_buckets(ms/step): "
+        "embed_norm_ffn ref={ref_enf:.4f} tri={tri_enf:.4f}; "
+        "qkv_reshape ref={ref_qkv:.4f} tri={tri_qkv:.4f}; "
+        "optimizer ref={ref_opt:.4f} tri={tri_opt:.4f}".format(
+            ref_enf=breakdown["reference_embed_norm_ffn_ms_per_step"],
+            tri_enf=breakdown["triton_embed_norm_ffn_ms_per_step"],
+            ref_qkv=breakdown["reference_qkv_reshape_ms_per_step"],
+            tri_qkv=breakdown["triton_qkv_reshape_ms_per_step"],
+            ref_opt=breakdown["reference_optimizer_ms_per_step"],
+            tri_opt=breakdown["triton_optimizer_ms_per_step"],
         )
     )
     print(f"  bwd_total_ms={breakdown['bwd_total_ms']:.4f} profile_calls={breakdown['profile_calls']:.0f}")
-    print(f"  integration_other_ms={breakdown['integration_other_ms']:.4f}")
     print(f"delta_vs_reference_ms={breakdown['delta_vs_reference_ms']:.4f}")
 
     if args.csv_out:
@@ -315,8 +372,18 @@ def main() -> None:
                 "breakdown_dq_ms",
                 "breakdown_dk_dv_ms",
                 "breakdown_shared_ms",
-                "breakdown_kernel_sum_ms",
-                "breakdown_integration_other_ms",
+                "breakdown_reference_sdpa_fwd_ms_per_step",
+                "breakdown_triton_sdpa_fwd_ms_per_step",
+                "breakdown_reference_sdpa_total_ms_per_step",
+                "breakdown_triton_sdpa_total_ms_per_step",
+                "breakdown_reference_non_sdpa_ms_per_step",
+                "breakdown_triton_non_sdpa_ms_per_step",
+                "breakdown_reference_embed_norm_ffn_ms_per_step",
+                "breakdown_triton_embed_norm_ffn_ms_per_step",
+                "breakdown_reference_qkv_reshape_ms_per_step",
+                "breakdown_triton_qkv_reshape_ms_per_step",
+                "breakdown_reference_optimizer_ms_per_step",
+                "breakdown_triton_optimizer_ms_per_step",
                 "breakdown_delta_vs_reference_ms",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -339,17 +406,27 @@ def main() -> None:
                         "breakdown_dq_ms": breakdown["dq_ms"],
                         "breakdown_dk_dv_ms": breakdown["dk_dv_ms"],
                         "breakdown_shared_ms": breakdown["shared_ms"],
-                        "breakdown_kernel_sum_ms": breakdown["kernel_sum_ms"],
-                        "breakdown_integration_other_ms": breakdown["integration_other_ms"],
+                        "breakdown_reference_sdpa_fwd_ms_per_step": breakdown["reference_sdpa_fwd_ms_per_step"],
+                        "breakdown_triton_sdpa_fwd_ms_per_step": breakdown["triton_sdpa_fwd_ms_per_step"],
+                        "breakdown_reference_sdpa_total_ms_per_step": breakdown["reference_sdpa_total_ms_per_step"],
+                        "breakdown_triton_sdpa_total_ms_per_step": breakdown["triton_sdpa_total_ms_per_step"],
+                        "breakdown_reference_non_sdpa_ms_per_step": breakdown["reference_non_sdpa_ms_per_step"],
+                        "breakdown_triton_non_sdpa_ms_per_step": breakdown["triton_non_sdpa_ms_per_step"],
+                        "breakdown_reference_embed_norm_ffn_ms_per_step": breakdown["reference_embed_norm_ffn_ms_per_step"],
+                        "breakdown_triton_embed_norm_ffn_ms_per_step": breakdown["triton_embed_norm_ffn_ms_per_step"],
+                        "breakdown_reference_qkv_reshape_ms_per_step": breakdown["reference_qkv_reshape_ms_per_step"],
+                        "breakdown_triton_qkv_reshape_ms_per_step": breakdown["triton_qkv_reshape_ms_per_step"],
+                        "breakdown_reference_optimizer_ms_per_step": breakdown["reference_optimizer_ms_per_step"],
+                        "breakdown_triton_optimizer_ms_per_step": breakdown["triton_optimizer_ms_per_step"],
                         "breakdown_delta_vs_reference_ms": breakdown["delta_vs_reference_ms"],
                     }
                 )
                 writer.writerow(enriched)
         print(f"\nwrote {out_path}")
 
-    if breakdown["integration_other_ms"] > breakdown["kernel_sum_ms"] * 0.5:
+    if breakdown["triton_non_sdpa_ms_per_step"] > breakdown["triton_sdpa_total_ms_per_step"]:
         print(
-            "\n[next ROI] integration_other is still large; prioritize "
+            "\n[next ROI] non-SDPA step time is still dominant; prioritize "
             "buffer reuse/preallocation in autograd path, then CUDA Graph capture."
         )
 
