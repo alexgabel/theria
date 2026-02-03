@@ -27,6 +27,8 @@ _TRITON_SDPA_BWD_PROFILE = {
     "shared_ms_sum": 0.0,
 }
 
+_TRITON_SDPA_BWD_BUFFER_CACHE: dict[tuple, dict[str, torch.Tensor]] = {}
+
 
 def reset_triton_sdpa_bwd_profile() -> None:
     """Reset cumulative backward timing stats for Triton fused SDPA."""
@@ -37,6 +39,28 @@ def reset_triton_sdpa_bwd_profile() -> None:
 def get_triton_sdpa_bwd_profile() -> dict[str, float | int]:
     """Return cumulative backward timing stats for Triton fused SDPA."""
     return dict(_TRITON_SDPA_BWD_PROFILE)
+
+
+def _get_bwd_reuse_buffers(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> dict[str, torch.Tensor]:
+    """
+    Return reusable backward buffers keyed by shape/device/dtype.
+    Enabled via THERIA_SDPA_BWD_REUSE=1 to reduce allocator overhead.
+    """
+    B, H, T, _ = q.shape
+    key = (q.device.type, q.device.index, q.dtype, tuple(q.shape), tuple(k.shape), tuple(v.shape))
+    cached = _TRITON_SDPA_BWD_BUFFER_CACHE.get(key)
+    if cached is None:
+        cached = {
+            "delta": torch.empty((B, H, T), device=q.device, dtype=torch.float32),
+            "dq": torch.empty_like(q),
+            "dk": torch.empty_like(k),
+            "dv": torch.empty_like(v),
+        }
+        # Keep cache bounded in case many shapes are seen.
+        if len(_TRITON_SDPA_BWD_BUFFER_CACHE) >= 8:
+            _TRITON_SDPA_BWD_BUFFER_CACHE.clear()
+        _TRITON_SDPA_BWD_BUFFER_CACHE[key] = cached
+    return cached
 
 
 @triton.autotune(
@@ -407,6 +431,8 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
     def backward(ctx, grad_out):
         q, k, v, m, l, out = ctx.saved_tensors
         scale = 1.0 / (q.shape[-1] ** 0.5)
+        use_reuse = os.environ.get("THERIA_SDPA_BWD_REUSE", "0") != "0"
+        reuse_buffers = _get_bwd_reuse_buffers(q, k, v) if use_reuse else None
         profile_bwd = os.environ.get("THERIA_SDPA_PROFILE_BWD", "0") != "0" and grad_out.is_cuda
         if profile_bwd:
             dev = grad_out.device
@@ -416,7 +442,11 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
             ev_delta_end = torch.cuda.Event(enable_timing=True)
             ev_total_start.record()
             ev_delta_start.record()
-        delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
+        if reuse_buffers is not None:
+            delta = reuse_buffers["delta"]
+            torch.sum(grad_out.float() * out.float(), dim=-1, out=delta)
+        else:
+            delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
         if profile_bwd:
             ev_delta_end.record()
 
@@ -439,11 +469,18 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
                 ev_dk_dv_start = torch.cuda.Event(enable_timing=True)
                 ev_dk_dv_end = torch.cuda.Event(enable_timing=True)
                 ev_dq_start.record()
-            dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale, delta=delta)
+            dq = sdpa_bwd_dq(
+                q, k, v, grad_out, m, l, scale, delta=delta,
+                dq_out=(reuse_buffers["dq"] if reuse_buffers is not None else None),
+            )
             if profile_bwd:
                 ev_dq_end.record()
                 ev_dk_dv_start.record()
-            dk, dv = sdpa_bwd_dk_dv(q, k, v, grad_out, m, l, scale, delta=delta)
+            dk, dv = sdpa_bwd_dk_dv(
+                q, k, v, grad_out, m, l, scale, delta=delta,
+                dk_out=(reuse_buffers["dk"] if reuse_buffers is not None else None),
+                dv_out=(reuse_buffers["dv"] if reuse_buffers is not None else None),
+            )
             if profile_bwd:
                 ev_dk_dv_end.record()
 

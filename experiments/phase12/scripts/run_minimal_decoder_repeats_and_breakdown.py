@@ -164,6 +164,7 @@ def main() -> None:
     parser.add_argument("--dtype", type=str, default="float16", choices=["float16", "float32", "bfloat16"])
     parser.add_argument("--benchmark-symmetric-layout", action="store_true")
     parser.add_argument("--bwd-shared", type=int, default=0, choices=[0, 1], help="Set THERIA_SDPA_BWD_SHARED")
+    parser.add_argument("--bwd-reuse", type=int, default=1, choices=[0, 1], help="Set THERIA_SDPA_BWD_REUSE")
     parser.add_argument("--csv-out", type=str, default="")
     args = parser.parse_args()
 
@@ -171,6 +172,7 @@ def main() -> None:
     if device.type != "cuda":
         raise ValueError("This script is CUDA-focused. Use --device cuda.")
     os.environ["THERIA_SDPA_BWD_SHARED"] = str(args.bwd_shared)
+    os.environ["THERIA_SDPA_BWD_REUSE"] = str(args.bwd_reuse)
 
     repo_root = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(repo_root))
@@ -235,6 +237,7 @@ def main() -> None:
                 "n_heads": args.n_heads,
                 "bench_steps": args.bench_steps,
                 "bwd_shared": args.bwd_shared,
+                "bwd_reuse": args.bwd_reuse,
                 "symmetric_layout": int(args.benchmark_symmetric_layout),
             }
         )

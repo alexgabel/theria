@@ -618,7 +618,7 @@ def _sdpa_bwd_dk_dv_kernel(
     tl.store(dv_ptrs, dv_acc, mask=mask)
 
 
-def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None):
+def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=None):
     """
     Compute dK and dV in one Triton pass for a fixed key block.
     This reduces kernel launches and shared-memory traffic vs separate dk/dv paths.
@@ -626,8 +626,12 @@ def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None):
     _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
     B, H, T, D = q.shape
     M = k.shape[2]
-    dk = torch.empty_like(k)
-    dv = torch.empty_like(v)
+    dk = dk_out if dk_out is not None else torch.empty_like(k)
+    dv = dv_out if dv_out is not None else torch.empty_like(v)
+    if dk.shape != k.shape or dk.dtype != k.dtype or dk.device != k.device:
+        raise AssertionError("dk_out must match k shape/device/dtype")
+    if dv.shape != v.shape or dv.dtype != v.dtype or dv.device != v.device:
+        raise AssertionError("dv_out must match v shape/device/dtype")
     if delta is None:
         delta = _compute_row_delta(q, k, v, dout, m, l, scale)
     if delta.shape != (B, H, T):
@@ -834,14 +838,16 @@ def _sdpa_bwd_dq_kernel(
     tl.store(dq_ptrs, dq_acc, mask=(offs_m < Tq) & (offs_d[None, :] < D))
 
 
-def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None):
+def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None, dq_out=None):
     """
     Compute dQ for SDPA using saved (m, l). Dv == D assumed.
     """
     _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
     B, H, T, D = q.shape
     M = k.shape[2]
-    dq = torch.empty_like(q)
+    dq = dq_out if dq_out is not None else torch.empty_like(q)
+    if dq.shape != q.shape or dq.dtype != q.dtype or dq.device != q.device:
+        raise AssertionError("dq_out must match q shape/device/dtype")
     if delta is None:
         delta = _compute_row_delta(q, k, v, dout, m, l, scale)
     if delta.shape != (B, H, T):
