@@ -59,11 +59,15 @@ def run_behavior(
     inner_steps: int,
     inner_lr: float,
     outer_lr: float,
+    seq_len: int = 32,
+    num_signal_positions: int = 4,
     device: torch.device,
     autocast_enabled: bool = False,
     grad_eps: float | None = None,
     rel_diff_probe: bool = True,
 ) -> dict[str, float | int | str]:
+    if num_signal_positions >= seq_len:
+        raise ValueError("num_signal_positions must be < seq_len (position 0 is reserved).")
     torch.manual_seed(seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
@@ -113,7 +117,15 @@ def run_behavior(
 
     for _ in range(outer_steps):
         optimizer.zero_grad(set_to_none=True)
-        tasks = [task_sampler(device=device) for _ in range(meta_batch_size)]
+        tasks = [
+            task_sampler(
+                T=seq_len,
+                D=model.cfg.d_model,
+                num_signal_positions=num_signal_positions,
+                device=device,
+            )
+            for _ in range(meta_batch_size)
+        ]
         # Keep explicit autocast flag in logs even when fixed for this phase.
         with torch.autocast(
             device_type=device.type,
@@ -168,7 +180,12 @@ def run_behavior(
             enabled=autocast_enabled,
             dtype=cast_dtype,
         ):
-            probe_task = task_sampler(device=device)
+            probe_task = task_sampler(
+                T=seq_len,
+                D=model.cfg.d_model,
+                num_signal_positions=num_signal_positions,
+                device=device,
+            )
             params = [p for p in model.parameters() if p.requires_grad]
             outer_full = meta_loss_on_tasks(
                 model=model,
@@ -207,6 +224,8 @@ def run_behavior(
         "inner_steps": inner_steps,
         "inner_lr": inner_lr,
         "outer_lr": outer_lr,
+        "seq_len": seq_len,
+        "num_signal_positions": num_signal_positions,
         "dtype": dtype_name,
         "compute_dtype": compute_dtype,
         "autocast": int(bool(autocast_enabled)),
@@ -235,6 +254,8 @@ def main() -> None:
     parser.add_argument("--inner-steps", type=int, default=1)
     parser.add_argument("--inner-lr", type=float, default=0.4)
     parser.add_argument("--outer-lr", type=float, default=1e-3)
+    parser.add_argument("--seq-len", type=int, default=32)
+    parser.add_argument("--num-signal-positions", type=int, default=4)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--autocast", action="store_true", help="Enable torch.autocast during training")
     parser.add_argument("--csv-out", type=str, default=None)
@@ -250,6 +271,8 @@ def main() -> None:
             inner_steps=args.inner_steps,
             inner_lr=args.inner_lr,
             outer_lr=args.outer_lr,
+            seq_len=args.seq_len,
+            num_signal_positions=args.num_signal_positions,
             device=torch.device(args.device),
             autocast_enabled=args.autocast,
         )
@@ -264,6 +287,8 @@ def main() -> None:
             "inner_steps": args.inner_steps,
             "inner_lr": args.inner_lr,
             "outer_lr": args.outer_lr,
+            "seq_len": args.seq_len,
+            "num_signal_positions": args.num_signal_positions,
             "dtype": "NA",
             "compute_dtype": "NA",
             "autocast": int(bool(args.autocast)),
@@ -312,6 +337,8 @@ def main() -> None:
                     "outer_lr",
                     "outer_steps",
                     "inner_lr",
+                    "seq_len",
+                    "num_signal_positions",
                     "dtype",
                     "compute_dtype",
                     "autocast",

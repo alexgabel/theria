@@ -10,6 +10,8 @@ OUTER_STEPS="${OUTER_STEPS:-500}"
 META_BATCH_SIZE="${META_BATCH_SIZE:-16}"
 INNER_LR="${INNER_LR:-0.4}"
 OUTER_LR="${OUTER_LR:-1e-3}"
+SEQ_LEN="${SEQ_LEN:-32}"
+NUM_SIGNAL_POSITIONS="${NUM_SIGNAL_POSITIONS:-4}"
 SEEDS="${SEEDS:-0 1}"
 INNER_STEPS_LIST="${INNER_STEPS_LIST:-1 5 10 20}"
 
@@ -32,6 +34,8 @@ python experiments/phase12/scripts/run_phase12_behavior.py \
   --inner-steps 1 \
   --inner-lr "${INNER_LR}" \
   --outer-lr "${OUTER_LR}" \
+  --seq-len "${SEQ_LEN}" \
+  --num-signal-positions "${NUM_SIGNAL_POSITIONS}" \
   --device cpu \
   --csv-out "${SMOKE_CSV}"
 
@@ -48,6 +52,8 @@ for mode in FULL FO FO_STRICT; do
         --inner-steps "${inner_steps}" \
         --inner-lr "${INNER_LR}" \
         --outer-lr "${OUTER_LR}" \
+        --seq-len "${SEQ_LEN}" \
+        --num-signal-positions "${NUM_SIGNAL_POSITIONS}" \
         --device cpu \
         --csv-out "${REF_CSV}"
     done
@@ -67,6 +73,8 @@ for mode in FULL FO FO_STRICT; do
         --inner-steps "${inner_steps}" \
         --inner-lr "${INNER_LR}" \
         --outer-lr "${OUTER_LR}" \
+        --seq-len "${SEQ_LEN}" \
+        --num-signal-positions "${NUM_SIGNAL_POSITIONS}" \
         --device cuda \
         --csv-out "${TRI_CSV}"
     done
@@ -85,6 +93,8 @@ echo "== Phase 12: risk checks =="
 python experiments/phase12/scripts/check_phase12_risks.py \
   --determinism-outer-steps 100 \
   --out-csv "${RISK_CSV}" \
+  --seq-len "${SEQ_LEN}" \
+  --num-signal-positions "${NUM_SIGNAL_POSITIONS}" \
   --parity-device cuda
 
 echo "Done."

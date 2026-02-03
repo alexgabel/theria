@@ -31,6 +31,8 @@ def main() -> None:
     parser.add_argument("--out-csv", type=str, default="experiments/phase12/runs/phase12_risk_checks.csv")
     parser.add_argument("--parity-device", type=str, default="cuda")
     parser.add_argument("--determinism-tol", type=float, default=1e-9)
+    parser.add_argument("--seq-len", type=int, default=32)
+    parser.add_argument("--num-signal-positions", type=int, default=4)
     args = parser.parse_args()
 
     rows: list[dict[str, str | float]] = []
@@ -45,6 +47,8 @@ def main() -> None:
         inner_steps=5,
         inner_lr=0.4,
         outer_lr=1e-3,
+        seq_len=args.seq_len,
+        num_signal_positions=args.num_signal_positions,
         device=torch.device("cpu"),
         autocast_enabled=False,
         rel_diff_probe=False,
@@ -58,6 +62,8 @@ def main() -> None:
         inner_steps=5,
         inner_lr=0.4,
         outer_lr=1e-3,
+        seq_len=args.seq_len,
+        num_signal_positions=args.num_signal_positions,
         device=torch.device("cpu"),
         autocast_enabled=False,
         rel_diff_probe=False,
