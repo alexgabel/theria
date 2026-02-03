@@ -12,9 +12,8 @@ import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
 from theria.attention.triton_sdpa_backward import (
-    sdpa_bwd_dv,
     sdpa_bwd_dq,
-    sdpa_bwd_dk,
+    sdpa_bwd_dk_dv,
     sdpa_bwd_shared_staged,
 )
 
@@ -394,10 +393,9 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
             # Shared staged path: reconstruct softmax terms once per query chunk.
             dq, dk, dv = sdpa_bwd_shared_staged(q, k, v, grad_out, m, l, scale, delta=delta)
         else:
-            # Legacy explicit path (three kernels / passes).
+            # Explicit path with fused dk+dv key-block pass (two kernels total).
             dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale, delta=delta)
-            dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale, delta=delta)
-            dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+            dk, dv = sdpa_bwd_dk_dv(q, k, v, grad_out, m, l, scale, delta=delta)
         return dq, dk, dv
 
 

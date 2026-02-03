@@ -64,7 +64,7 @@ class MultiHeadAttention(nn.Module):
     5. Transpose back and reshape to (B, T, D)
     """
 
-    def __init__(self, d_model, n_heads, backend="triton_full_fused"):
+    def __init__(self, d_model, n_heads, backend="triton_full_fused", symmetric_layout=False):
         super().__init__()
         assert d_model % n_heads == 0, f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
 
@@ -72,6 +72,7 @@ class MultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.d_per_head = d_model // n_heads
         self.backend = backend
+        self.symmetric_layout = symmetric_layout
 
         # Fused QKV projection cuts memory traffic and projection launch overhead.
         self.qkv_proj = nn.Linear(d_model, 3 * d_model)
@@ -89,25 +90,13 @@ class MultiHeadAttention(nn.Module):
         """
         B, T, D = x.shape
 
-        # For fused backend, produce contiguous q/k/v with one contiguous call
-        # instead of three separate q/k/v copies after transpose.
-        if self.backend == "triton_full_fused":
-            qkv = self.qkv_proj(x).view(B, T, 3, self.n_heads, self.d_per_head)
-            qkv = qkv.permute(2, 0, 3, 1, 4).contiguous()  # (3, B, H, T, Dh)
-            q, k, v = qkv[0], qkv[1], qkv[2]  # each is contiguous (B, H, T, Dh)
-        else:
-            # Fused projection and split: (B, T, 3D) -> 3 x (B, T, D)
-            q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
-
-            # Reshape for multi-head: (B, T, D) -> (B, T, H, D//H)
-            q = q.view(B, T, self.n_heads, self.d_per_head)
-            k = k.view(B, T, self.n_heads, self.d_per_head)
-            v = v.view(B, T, self.n_heads, self.d_per_head)
-
-            # Transpose to (B, H, T, D//H) - sdpa_custom expects this format.
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2)
-            v = v.transpose(1, 2)
+        # Shared QKV layout path for all backends.
+        # Optional contiguous materialization makes benchmark prep symmetric.
+        qkv = self.qkv_proj(x).view(B, T, 3, self.n_heads, self.d_per_head)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, H, T, Dh)
+        if self.backend == "triton_full_fused" or self.symmetric_layout:
+            qkv = qkv.contiguous()
+        q, k, v = qkv.unbind(0)  # each: (B, H, T, Dh)
 
         # Call theria's fused attention
         attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
@@ -146,10 +135,10 @@ class TransformerBlock(nn.Module):
     Gradient flow is more stable than post-norm.
     """
 
-    def __init__(self, d_model, n_heads, d_ff, backend="triton_full_fused"):
+    def __init__(self, d_model, n_heads, d_ff, backend="triton_full_fused", symmetric_layout=False):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
-        self.attn = MultiHeadAttention(d_model, n_heads, backend)
+        self.attn = MultiHeadAttention(d_model, n_heads, backend, symmetric_layout=symmetric_layout)
         self.norm2 = nn.LayerNorm(d_model)
         self.ff = FeedForward(d_model, d_ff)
 
@@ -182,7 +171,8 @@ class MinimalDecoderTransformer(nn.Module):
         d_ff,
         n_layers,
         num_classes,
-        backend="triton_full_fused"
+        backend="triton_full_fused",
+        symmetric_layout=False,
     ):
         super().__init__()
 
@@ -191,7 +181,7 @@ class MinimalDecoderTransformer(nn.Module):
 
         # Stack of transformer blocks
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, n_heads, d_ff, backend)
+            TransformerBlock(d_model, n_heads, d_ff, backend, symmetric_layout=symmetric_layout)
             for _ in range(n_layers)
         ])
 
@@ -346,6 +336,7 @@ def benchmark_backend(
     lr: float,
     warmup_steps: int,
     bench_steps: int,
+    symmetric_layout: bool = False,
 ):
     """Benchmark one backend with forward+backward+optimizer updates."""
     torch.manual_seed(seed)
@@ -362,6 +353,7 @@ def benchmark_backend(
         n_layers=n_layers,
         num_classes=num_classes,
         backend=backend,
+        symmetric_layout=symmetric_layout,
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -471,6 +463,11 @@ def main():
     parser.add_argument("--bench-warmup", type=int, default=10, help="Warmup steps for benchmark mode")
     parser.add_argument("--bench-steps", type=int, default=100, help="Timed steps for benchmark mode")
     parser.add_argument("--bench-csv", type=str, default=None, help="Optional CSV output path for benchmark rows")
+    parser.add_argument(
+        "--benchmark-symmetric-layout",
+        action="store_true",
+        help="Force identical QKV layout materialization for reference and Triton in benchmark mode",
+    )
 
     args = parser.parse_args()
 
@@ -525,6 +522,7 @@ def main():
                 lr=args.lr,
                 warmup_steps=args.bench_warmup,
                 bench_steps=args.bench_steps,
+                symmetric_layout=args.benchmark_symmetric_layout,
             )
             rows.append(row)
             print(
@@ -545,12 +543,15 @@ def main():
                         "backend",
                         "warmup_steps",
                         "bench_steps",
+                        "symmetric_layout",
                         "total_ms",
                         "ms_per_step",
                         "final_loss",
                     ],
                 )
                 w.writeheader()
+                for row in rows:
+                    row["symmetric_layout"] = int(args.benchmark_symmetric_layout)
                 w.writerows(rows)
         return
 

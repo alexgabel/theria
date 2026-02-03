@@ -516,6 +516,190 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale, delta=None):
     return dk
 
 
+@triton.jit
+def _sdpa_bwd_dk_dv_kernel(
+    Q, K, V, DO, DK, DV, M, L, DELTA,
+    Tq, Tk, D, Hdim,
+    stride_qbh, stride_qm, stride_qk,
+    stride_kbh, stride_kn, stride_kk,
+    stride_vbh, stride_vn, stride_vk,
+    stride_dob, stride_doh, stride_dot, stride_dod,
+    stride_dkbh, stride_dkn, stride_dkk,
+    stride_dvbh, stride_dvn, stride_dvk,
+    stride_mbh, stride_mt,
+    stride_lbh, stride_lt,
+    stride_dbh, stride_dt,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    offs_m = tl.arange(0, BLOCK_M)[:, None]
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_D)
+
+    q_ptrs_base = Q + pid_bh * stride_qbh
+    b = pid_bh // Hdim
+    h = pid_bh % Hdim
+    do_ptrs_base = DO + b * stride_dob + h * stride_doh
+    k_ptrs_base = K + pid_bh * stride_kbh
+    v_ptrs_base = V + pid_bh * stride_vbh
+    m_ptrs_base = M + pid_bh * stride_mbh
+    l_ptrs_base = L + pid_bh * stride_lbh
+    d_ptrs_base = DELTA + pid_bh * stride_dbh
+
+    dk_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+    dv_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+
+    k_ptrs = k_ptrs_base + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    v_ptrs = v_ptrs_base + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vk
+    k = tl.load(
+        k_ptrs,
+        mask=(offs_n[:, None] < Tk) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+    v = tl.load(
+        v_ptrs,
+        mask=(offs_n[:, None] < Tk) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+
+    for m0 in range(0, Tq, BLOCK_M):
+        q_ptrs = q_ptrs_base + (m0 + offs_m) * stride_qm + offs_d[None, :] * stride_qk
+        q = tl.load(
+            q_ptrs,
+            mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+        delta = tl.load(
+            d_ptrs_base + (m0 + offs_m) * stride_dt,
+            mask=((m0 + offs_m) < Tq),
+            other=0.0,
+        ).to(tl.float32)
+
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale
+        m_idx = m0 + offs_m
+        m_mask = (m_idx < Tq)
+        m_mask_f = m_mask.to(tl.float32)
+        m_block = tl.load(m_ptrs_base + m_idx * stride_mt).to(tl.float32)
+        l_block = tl.load(l_ptrs_base + m_idx * stride_lt).to(tl.float32)
+        m_block = m_block * m_mask_f
+        l_block = l_block * m_mask_f + (1.0 - m_mask_f)
+        mask_m = m_mask_f
+        mask_n = (offs_n < Tk).to(tl.float32)[None, :]
+        mask_mn = mask_m * mask_n
+        scores = scores - m_block
+        scores = scores * mask_mn + (-1.0e9) * (1.0 - mask_mn)
+        p = tl.exp(scores) * mask_mn
+        l_block = tl.maximum(l_block, 1e-12)
+        p = p / l_block
+
+        do_ptrs = do_ptrs_base + (m0 + offs_m) * stride_dot + offs_d[None, :] * stride_dod
+        do = tl.load(
+            do_ptrs,
+            mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+
+        # dV accumulates as P^T @ dO (same softmax terms as dK path).
+        dv_acc += tl.dot(tl.trans(p), do, out_dtype=tl.float32, input_precision="ieee")
+
+        dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32, input_precision="ieee")
+        ds = p * (dp - delta)
+        dk_acc += tl.dot(tl.trans(ds), q, out_dtype=tl.float32, input_precision="ieee") * scale
+
+    mask = (offs_n[:, None] < Tk) & (offs_d[None, :] < D)
+    dk_ptrs = DK + pid_bh * stride_dkbh + offs_n[:, None] * stride_dkn + offs_d[None, :] * stride_dkk
+    dv_ptrs = DV + pid_bh * stride_dvbh + offs_n[:, None] * stride_dvn + offs_d[None, :] * stride_dvk
+    tl.store(dk_ptrs, dk_acc, mask=mask)
+    tl.store(dv_ptrs, dv_acc, mask=mask)
+
+
+def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None):
+    """
+    Compute dK and dV in one Triton pass for a fixed key block.
+    This reduces kernel launches and shared-memory traffic vs separate dk/dv paths.
+    """
+    _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
+    B, H, T, D = q.shape
+    M = k.shape[2]
+    dk = torch.empty_like(k)
+    dv = torch.empty_like(v)
+    if delta is None:
+        delta = _compute_row_delta(q, k, v, dout, m, l, scale)
+    if delta.shape != (B, H, T):
+        raise AssertionError("delta must have shape (B,H,T)")
+
+    q_ = q.reshape(B * H, T, D)
+    k_ = k.reshape(B * H, M, D)
+    v_ = v.reshape(B * H, M, D)
+    dk_ = dk.reshape(B * H, M, D)
+    dv_ = dv.reshape(B * H, M, D)
+    m_ = m.reshape(B * H, T)
+    l_ = l.reshape(B * H, T)
+    delta_ = delta.reshape(B * H, T).contiguous()
+
+    BLOCK_M = 64 if T >= 256 else 32
+    BLOCK_N = 32
+    BLOCK_D = 32 if D <= 32 else 64
+    grid = (
+        B * H,
+        triton.cdiv(M, BLOCK_N),
+    )
+
+    _sdpa_bwd_dk_dv_kernel[grid](
+        q_,
+        k_,
+        v_,
+        dout,
+        dk_,
+        dv_,
+        m_,
+        l_,
+        delta_,
+        T,
+        M,
+        D,
+        H,
+        q_.stride(0),
+        q_.stride(1),
+        q_.stride(2),
+        k_.stride(0),
+        k_.stride(1),
+        k_.stride(2),
+        v_.stride(0),
+        v_.stride(1),
+        v_.stride(2),
+        dout.stride(0),
+        dout.stride(1),
+        dout.stride(2),
+        dout.stride(3),
+        dk_.stride(0),
+        dk_.stride(1),
+        dk_.stride(2),
+        dv_.stride(0),
+        dv_.stride(1),
+        dv_.stride(2),
+        m_.stride(0),
+        m_.stride(1),
+        l_.stride(0),
+        l_.stride(1),
+        delta_.stride(0),
+        delta_.stride(1),
+        scale,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_D=BLOCK_D,
+        num_warps=4,
+        num_stages=1,
+    )
+
+    return dk, dv
+
+
 def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     """
     Explicit JVP for the **frozen-stats** SDPA operator using saved (m, l).
@@ -728,6 +912,7 @@ def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None):
 __all__ = [
     "sdpa_bwd_dq",
     "sdpa_bwd_dk",
+    "sdpa_bwd_dk_dv",
     "sdpa_bwd_dv",
     "sdpa_bwd_shared_staged",
     "sdpa_jvp",
