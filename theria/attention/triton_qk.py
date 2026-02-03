@@ -6,11 +6,17 @@ Backward is implemented in Python using standard matmul formulas to preserve
 autograd correctness while keeping the kernel minimal.
 """
 
+import os
 import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
-from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa_bwd_dk
+from theria.attention.triton_sdpa_backward import (
+    sdpa_bwd_dv,
+    sdpa_bwd_dq,
+    sdpa_bwd_dk,
+    sdpa_bwd_shared_staged,
+)
 
 
 @triton.autotune(
@@ -373,17 +379,25 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v):
         out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
-        ctx.save_for_backward(q, k, v, m, l)
+        # Save out to form row-wise delta once and reuse it across dQ/dK paths.
+        ctx.save_for_backward(q, k, v, m, l, out)
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
-        q, k, v, m, l = ctx.saved_tensors
+        q, k, v, m, l, out = ctx.saved_tensors
         scale = 1.0 / (q.shape[-1] ** 0.5)
-        # Triton backward (Phase 9): explicit dQ/dK/dV, no autograd fallback.
-        dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale)
-        dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale)
-        dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+        delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
+        # Default to legacy Triton-kernel backward path: currently faster in benchmarks.
+        use_shared = os.environ.get("THERIA_SDPA_BWD_SHARED", "0") != "0"
+        if use_shared:
+            # Shared staged path: reconstruct softmax terms once per query chunk.
+            dq, dk, dv = sdpa_bwd_shared_staged(q, k, v, grad_out, m, l, scale, delta=delta)
+        else:
+            # Legacy explicit path (three kernels / passes).
+            dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale, delta=delta)
+            dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale, delta=delta)
+            dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
         return dq, dk, dv
 
 

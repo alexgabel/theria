@@ -52,38 +52,6 @@ import torch.nn as nn
 from theria.attention.custom import sdpa_custom
 
 
-class _ContiguousGrad(torch.autograd.Function):
-    """
-    Identity function that ensures gradient contiguity for triton kernels.
-
-    Background:
-    - Triton backward kernels require contiguous `dout` (gradient w.r.t. output)
-    - Multi-head attention uses transpose operations: (B,H,T,D) → (B,T,H,D)
-    - Transpose backward creates non-contiguous gradients
-    - This breaks triton's backward contract
-
-    Solution:
-    - Apply this wrapper right after sdpa_custom()
-    - Forward pass: identity (no overhead)
-    - Backward pass: ensures gradient is contiguous before reaching triton kernels
-
-    Note: Single-head attention (using unsqueeze instead of transpose) doesn't need this.
-    """
-    @staticmethod
-    def forward(ctx, x):  # noqa: ARG004 - ctx required by autograd.Function signature
-        return x
-
-    @staticmethod
-    def backward(ctx, grad_output):  # noqa: ARG004 - ctx required by autograd.Function signature
-        # Ensure gradient is contiguous before passing to triton backward kernels
-        return grad_output.contiguous()
-
-
-def _ensure_contiguous_grad(x):
-    """Helper to ensure gradient contiguity without affecting forward pass."""
-    return _ContiguousGrad.apply(x)
-
-
 class MultiHeadAttention(nn.Module):
     """
     Multi-head self-attention using theria's fused backend.
@@ -121,32 +89,28 @@ class MultiHeadAttention(nn.Module):
         """
         B, T, D = x.shape
 
-        # Fused projection and split: (B, T, 3D) -> 3 x (B, T, D)
-        q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
-
-        # Reshape for multi-head: (B, T, D) -> (B, T, H, D//H)
-        q = q.view(B, T, self.n_heads, self.d_per_head)
-        k = k.view(B, T, self.n_heads, self.d_per_head)
-        v = v.view(B, T, self.n_heads, self.d_per_head)
-
-        # Transpose to (B, H, T, D//H) - the format sdpa_custom expects
-        # IMPORTANT: sdpa_custom expects (B, H, T, D) format where D is per-head dimension
-        q = q.transpose(1, 2)  # (B, H, T, D//H)
-        k = k.transpose(1, 2)  # (B, H, T, D//H)
-        v = v.transpose(1, 2)  # (B, H, T, D//H)
-
-        # CRITICAL: Contiguous tensors required for fused backend.
+        # For fused backend, produce contiguous q/k/v with one contiguous call
+        # instead of three separate q/k/v copies after transpose.
         if self.backend == "triton_full_fused":
-            q = q.contiguous()
-            k = k.contiguous()
-            v = v.contiguous()
+            qkv = self.qkv_proj(x).view(B, T, 3, self.n_heads, self.d_per_head)
+            qkv = qkv.permute(2, 0, 3, 1, 4).contiguous()  # (3, B, H, T, Dh)
+            q, k, v = qkv[0], qkv[1], qkv[2]  # each is contiguous (B, H, T, Dh)
+        else:
+            # Fused projection and split: (B, T, 3D) -> 3 x (B, T, D)
+            q, k, v = self.qkv_proj(x).chunk(3, dim=-1)
+
+            # Reshape for multi-head: (B, T, D) -> (B, T, H, D//H)
+            q = q.view(B, T, self.n_heads, self.d_per_head)
+            k = k.view(B, T, self.n_heads, self.d_per_head)
+            v = v.view(B, T, self.n_heads, self.d_per_head)
+
+            # Transpose to (B, H, T, D//H) - sdpa_custom expects this format.
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
 
         # Call theria's fused attention
         attn_out = sdpa_custom(q, k, v, backend=self.backend)  # (B, H, T, D//H)
-
-        # Triton backward kernels require contiguous dout.
-        if self.backend == "triton_full_fused":
-            attn_out = _ensure_contiguous_grad(attn_out)
 
         # Transpose back and reshape to (B, T, D)
         attn_out = attn_out.transpose(1, 2).contiguous()  # (B, T, H, D//H)
