@@ -17,6 +17,27 @@ from theria.attention.triton_sdpa_backward import (
     sdpa_bwd_shared_staged,
 )
 
+_TRITON_SDPA_BWD_PROFILE = {
+    "calls": 0,
+    "use_shared_calls": 0,
+    "total_bwd_ms_sum": 0.0,
+    "delta_ms_sum": 0.0,
+    "dq_ms_sum": 0.0,
+    "dk_dv_ms_sum": 0.0,
+    "shared_ms_sum": 0.0,
+}
+
+
+def reset_triton_sdpa_bwd_profile() -> None:
+    """Reset cumulative backward timing stats for Triton fused SDPA."""
+    for key in _TRITON_SDPA_BWD_PROFILE:
+        _TRITON_SDPA_BWD_PROFILE[key] = 0 if key.endswith("calls") else 0.0
+
+
+def get_triton_sdpa_bwd_profile() -> dict[str, float | int]:
+    """Return cumulative backward timing stats for Triton fused SDPA."""
+    return dict(_TRITON_SDPA_BWD_PROFILE)
+
 
 @triton.autotune(
     configs=[
@@ -386,16 +407,59 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
     def backward(ctx, grad_out):
         q, k, v, m, l, out = ctx.saved_tensors
         scale = 1.0 / (q.shape[-1] ** 0.5)
+        profile_bwd = os.environ.get("THERIA_SDPA_PROFILE_BWD", "0") != "0" and grad_out.is_cuda
+        if profile_bwd:
+            dev = grad_out.device
+            ev_total_start = torch.cuda.Event(enable_timing=True)
+            ev_total_end = torch.cuda.Event(enable_timing=True)
+            ev_delta_start = torch.cuda.Event(enable_timing=True)
+            ev_delta_end = torch.cuda.Event(enable_timing=True)
+            ev_total_start.record()
+            ev_delta_start.record()
         delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
+        if profile_bwd:
+            ev_delta_end.record()
+
         # Default to legacy Triton-kernel backward path: currently faster in benchmarks.
         use_shared = os.environ.get("THERIA_SDPA_BWD_SHARED", "0") != "0"
         if use_shared:
             # Shared staged path: reconstruct softmax terms once per query chunk.
+            if profile_bwd:
+                ev_shared_start = torch.cuda.Event(enable_timing=True)
+                ev_shared_end = torch.cuda.Event(enable_timing=True)
+                ev_shared_start.record()
             dq, dk, dv = sdpa_bwd_shared_staged(q, k, v, grad_out, m, l, scale, delta=delta)
+            if profile_bwd:
+                ev_shared_end.record()
         else:
             # Explicit path with fused dk+dv key-block pass (two kernels total).
+            if profile_bwd:
+                ev_dq_start = torch.cuda.Event(enable_timing=True)
+                ev_dq_end = torch.cuda.Event(enable_timing=True)
+                ev_dk_dv_start = torch.cuda.Event(enable_timing=True)
+                ev_dk_dv_end = torch.cuda.Event(enable_timing=True)
+                ev_dq_start.record()
             dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale, delta=delta)
+            if profile_bwd:
+                ev_dq_end.record()
+                ev_dk_dv_start.record()
             dk, dv = sdpa_bwd_dk_dv(q, k, v, grad_out, m, l, scale, delta=delta)
+            if profile_bwd:
+                ev_dk_dv_end.record()
+
+        if profile_bwd:
+            ev_total_end.record()
+            torch.cuda.synchronize(dev)
+            _TRITON_SDPA_BWD_PROFILE["calls"] += 1
+            if use_shared:
+                _TRITON_SDPA_BWD_PROFILE["use_shared_calls"] += 1
+            _TRITON_SDPA_BWD_PROFILE["total_bwd_ms_sum"] += float(ev_total_start.elapsed_time(ev_total_end))
+            _TRITON_SDPA_BWD_PROFILE["delta_ms_sum"] += float(ev_delta_start.elapsed_time(ev_delta_end))
+            if use_shared:
+                _TRITON_SDPA_BWD_PROFILE["shared_ms_sum"] += float(ev_shared_start.elapsed_time(ev_shared_end))
+            else:
+                _TRITON_SDPA_BWD_PROFILE["dq_ms_sum"] += float(ev_dq_start.elapsed_time(ev_dq_end))
+                _TRITON_SDPA_BWD_PROFILE["dk_dv_ms_sum"] += float(ev_dk_dv_start.elapsed_time(ev_dk_dv_end))
         return dq, dk, dv
 
 

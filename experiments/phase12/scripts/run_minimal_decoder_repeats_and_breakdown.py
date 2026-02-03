@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 import statistics
 import sys
-from typing import Callable
 
 import torch
 
@@ -44,22 +43,6 @@ def _summary(values: list[float]) -> dict[str, float]:
     }
 
 
-def _time_cuda_ms(fn: Callable[[], None], steps: int, warmup: int, device: torch.device) -> list[float]:
-    for _ in range(warmup):
-        fn()
-    torch.cuda.synchronize(device)
-    out: list[float] = []
-    for _ in range(steps):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        fn()
-        end.record()
-        torch.cuda.synchronize(device)
-        out.append(float(start.elapsed_time(end)))
-    return out
-
-
 def _load_minimal_decoder_module(repo_root: Path):
     mod_path = repo_root / "examples" / "minimal_decoder_transformer.py"
     spec = importlib.util.spec_from_file_location("minimal_decoder_transformer", mod_path)
@@ -70,85 +53,93 @@ def _load_minimal_decoder_module(repo_root: Path):
     return mod
 
 
-def _run_attention_breakdown(
+def _run_attention_breakdown_onpath(
     *,
-    batch_size: int,
+    minimal,
+    seed: int,
+    d_model: int,
     n_heads: int,
+    d_ff: int,
+    n_layers: int,
+    vocab_size: int,
+    num_classes: int,
+    batch_size: int,
     seq_len: int,
-    d_per_head: int,
-    dtype: torch.dtype,
     warmup: int,
     steps: int,
+    lr: float,
+    symmetric_layout: bool,
     device: torch.device,
 ) -> dict[str, float]:
-    from theria.attention.custom import sdpa_custom
-    from theria.attention.triton_qk import triton_sdpa_fused
-    from theria.attention.triton_sdpa_backward import sdpa_bwd_dk, sdpa_bwd_dq, sdpa_bwd_dv
+    from theria.attention.triton_qk import (
+        get_triton_sdpa_bwd_profile,
+        reset_triton_sdpa_bwd_profile,
+    )
 
-    q = torch.randn(batch_size, n_heads, seq_len, d_per_head, device=device, dtype=dtype).contiguous()
-    k = torch.randn_like(q).contiguous()
-    v = torch.randn_like(q).contiguous()
-    do = torch.randn_like(q).contiguous()
-    scale = 1.0 / (d_per_head**0.5)
+    prior_profile_env = os.environ.get("THERIA_SDPA_PROFILE_BWD", "0")
+    os.environ["THERIA_SDPA_PROFILE_BWD"] = "0"
+    ref = minimal.benchmark_backend(
+        backend="reference",
+        device=device,
+        seed=seed,
+        d_model=d_model,
+        n_heads=n_heads,
+        d_ff=d_ff,
+        n_layers=n_layers,
+        vocab_size=vocab_size,
+        num_classes=num_classes,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        lr=lr,
+        warmup_steps=warmup,
+        bench_steps=steps,
+        symmetric_layout=symmetric_layout,
+    )
 
-    q_ref = q.detach().clone().requires_grad_(True)
-    k_ref = k.detach().clone().requires_grad_(True)
-    v_ref = v.detach().clone().requires_grad_(True)
-    q_tri = q.detach().clone().requires_grad_(True)
-    k_tri = k.detach().clone().requires_grad_(True)
-    v_tri = v.detach().clone().requires_grad_(True)
+    reset_triton_sdpa_bwd_profile()
+    os.environ["THERIA_SDPA_PROFILE_BWD"] = "1"
+    tri = minimal.benchmark_backend(
+        backend="triton_full_fused",
+        device=device,
+        seed=seed,
+        d_model=d_model,
+        n_heads=n_heads,
+        d_ff=d_ff,
+        n_layers=n_layers,
+        vocab_size=vocab_size,
+        num_classes=num_classes,
+        seq_len=seq_len,
+        batch_size=batch_size,
+        lr=lr,
+        warmup_steps=warmup,
+        bench_steps=steps,
+        symmetric_layout=symmetric_layout,
+    )
+    profile = get_triton_sdpa_bwd_profile()
+    os.environ["THERIA_SDPA_PROFILE_BWD"] = prior_profile_env
 
-    def _step_ref() -> None:
-        q_ref.grad = None
-        k_ref.grad = None
-        v_ref.grad = None
-        out = sdpa_custom(q_ref, k_ref, v_ref, backend="reference")
-        loss = (out * do).sum()
-        loss.backward()
-
-    def _step_tri() -> None:
-        q_tri.grad = None
-        k_tri.grad = None
-        v_tri.grad = None
-        out = sdpa_custom(q_tri, k_tri, v_tri, backend="triton_full_fused")
-        loss = (out * do).sum()
-        loss.backward()
-
-    ref_step_ms = _time_cuda_ms(_step_ref, steps=steps, warmup=warmup, device=device)
-    tri_step_ms = _time_cuda_ms(_step_tri, steps=steps, warmup=warmup, device=device)
-
-    with torch.no_grad():
-        _, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
-
-    def _dq_once() -> None:
-        _ = sdpa_bwd_dq(q, k, v, do, m, l, scale)
-
-    def _dk_once() -> None:
-        _ = sdpa_bwd_dk(q, k, v, do, m, l, scale)
-
-    def _dv_once() -> None:
-        _ = sdpa_bwd_dv(q, k, do, m, l, scale)
-
-    dq_ms = _time_cuda_ms(_dq_once, steps=steps, warmup=warmup, device=device)
-    dk_ms = _time_cuda_ms(_dk_once, steps=steps, warmup=warmup, device=device)
-    dv_ms = _time_cuda_ms(_dv_once, steps=steps, warmup=warmup, device=device)
-
-    ref_med = _quantile(ref_step_ms, 0.5)
-    tri_med = _quantile(tri_step_ms, 0.5)
-    dq_med = _quantile(dq_ms, 0.5)
-    dk_med = _quantile(dk_ms, 0.5)
-    dv_med = _quantile(dv_ms, 0.5)
-    kernel_sum = dq_med + dk_med + dv_med
+    calls = max(int(profile.get("calls", 0)), 1)
+    delta_ms = float(profile.get("delta_ms_sum", 0.0)) / calls
+    dq_ms = float(profile.get("dq_ms_sum", 0.0)) / calls
+    dk_dv_ms = float(profile.get("dk_dv_ms_sum", 0.0)) / calls
+    shared_ms = float(profile.get("shared_ms_sum", 0.0)) / calls
+    bwd_total_ms = float(profile.get("total_bwd_ms_sum", 0.0)) / calls
+    ref_ms = float(ref["ms_per_step"])
+    tri_ms = float(tri["ms_per_step"])
+    kernel_sum = delta_ms + dq_ms + dk_dv_ms + shared_ms
 
     return {
-        "reference_step_total_ms": ref_med,
-        "triton_step_total_ms": tri_med,
-        "dq_ms": dq_med,
-        "dk_ms": dk_med,
-        "dv_ms": dv_med,
+        "reference_step_total_ms": ref_ms,
+        "triton_step_total_ms": tri_ms,
+        "profile_calls": float(calls),
+        "bwd_total_ms": bwd_total_ms,
+        "delta_path_ms": delta_ms,
+        "dq_ms": dq_ms,
+        "dk_dv_ms": dk_dv_ms,
+        "shared_ms": shared_ms,
         "kernel_sum_ms": kernel_sum,
-        "integration_other_ms": tri_med - kernel_sum,
-        "delta_vs_reference_ms": tri_med - ref_med,
+        "integration_other_ms": tri_ms - kernel_sum,
+        "delta_vs_reference_ms": tri_ms - ref_ms,
     }
 
 
@@ -269,28 +260,36 @@ def main() -> None:
         f"(mean={sp_s['mean']:.3f}x)"
     )
 
-    dtype_map = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
-    breakdown = _run_attention_breakdown(
+    breakdown = _run_attention_breakdown_onpath(
+        minimal=minimal,
+        seed=args.seed + 10_000,
+        d_model=args.d_model,
         batch_size=args.batch_size,
         n_heads=args.n_heads,
+        d_ff=args.d_ff,
+        n_layers=args.n_layers,
+        vocab_size=args.vocab_size,
+        num_classes=args.num_classes,
         seq_len=args.seq_len,
-        d_per_head=args.d_model // args.n_heads,
-        dtype=dtype_map[args.dtype],
+        lr=args.lr,
         warmup=args.breakdown_warmup,
         steps=args.breakdown_steps,
+        symmetric_layout=args.benchmark_symmetric_layout,
         device=device,
     )
-    print("\n=== Attention Breakdown (median ms) ===")
+    print("\n=== Attention Breakdown (on-path ms/call) ===")
     print(f"reference step_total_ms={breakdown['reference_step_total_ms']:.4f}")
     print(f"triton step_total_ms={breakdown['triton_step_total_ms']:.4f}")
     print(
-        "  dq_ms={dq:.4f} dk_ms={dk:.4f} dv_ms={dv:.4f}  (sum={sm:.4f})".format(
+        "  delta_ms={dlt:.4f} dq_ms={dq:.4f} dk_dv_ms={dkdv:.4f} shared_ms={sh:.4f}  (sum={sm:.4f})".format(
+            dlt=breakdown["delta_path_ms"],
             dq=breakdown["dq_ms"],
-            dk=breakdown["dk_ms"],
-            dv=breakdown["dv_ms"],
+            dkdv=breakdown["dk_dv_ms"],
+            sh=breakdown["shared_ms"],
             sm=breakdown["kernel_sum_ms"],
         )
     )
+    print(f"  bwd_total_ms={breakdown['bwd_total_ms']:.4f} profile_calls={breakdown['profile_calls']:.0f}")
     print(f"  integration_other_ms={breakdown['integration_other_ms']:.4f}")
     print(f"delta_vs_reference_ms={breakdown['delta_vs_reference_ms']:.4f}")
 
@@ -307,9 +306,12 @@ def main() -> None:
                 "summary_speedup_p90",
                 "breakdown_reference_step_total_ms",
                 "breakdown_triton_step_total_ms",
+                "breakdown_profile_calls",
+                "breakdown_bwd_total_ms",
+                "breakdown_delta_path_ms",
                 "breakdown_dq_ms",
-                "breakdown_dk_ms",
-                "breakdown_dv_ms",
+                "breakdown_dk_dv_ms",
+                "breakdown_shared_ms",
                 "breakdown_kernel_sum_ms",
                 "breakdown_integration_other_ms",
                 "breakdown_delta_vs_reference_ms",
@@ -328,9 +330,12 @@ def main() -> None:
                         "summary_speedup_p90": sp_s["p90"],
                         "breakdown_reference_step_total_ms": breakdown["reference_step_total_ms"],
                         "breakdown_triton_step_total_ms": breakdown["triton_step_total_ms"],
+                        "breakdown_profile_calls": breakdown["profile_calls"],
+                        "breakdown_bwd_total_ms": breakdown["bwd_total_ms"],
+                        "breakdown_delta_path_ms": breakdown["delta_path_ms"],
                         "breakdown_dq_ms": breakdown["dq_ms"],
-                        "breakdown_dk_ms": breakdown["dk_ms"],
-                        "breakdown_dv_ms": breakdown["dv_ms"],
+                        "breakdown_dk_dv_ms": breakdown["dk_dv_ms"],
+                        "breakdown_shared_ms": breakdown["shared_ms"],
                         "breakdown_kernel_sum_ms": breakdown["kernel_sum_ms"],
                         "breakdown_integration_other_ms": breakdown["integration_other_ms"],
                         "breakdown_delta_vs_reference_ms": breakdown["delta_vs_reference_ms"],
