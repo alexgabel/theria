@@ -131,11 +131,13 @@ def _run_attention_breakdown_onpath(
     os.environ["THERIA_MINIMAL_PROFILE_BUCKETS"] = prior_bucket_env
 
     calls = max(int(profile.get("calls", 0)), 1)
+    calls_per_step = float(calls) / max(warmup + steps, 1)
     delta_ms = float(profile.get("delta_ms_sum", 0.0)) / calls
     dq_ms = float(profile.get("dq_ms_sum", 0.0)) / calls
     dk_dv_ms = float(profile.get("dk_dv_ms_sum", 0.0)) / calls
     shared_ms = float(profile.get("shared_ms_sum", 0.0)) / calls
     bwd_total_ms = float(profile.get("total_bwd_ms_sum", 0.0)) / calls
+    bwd_ms_per_step = bwd_total_ms * calls_per_step
     ref_ms = float(ref["ms_per_step"])
     tri_ms = float(tri["ms_per_step"])
     ref_sdpa_fwd_ms = float(ref_buckets.get("sdpa_fwd_ms", 0.0)) / max(steps, 1)
@@ -147,7 +149,7 @@ def _run_attention_breakdown_onpath(
     ref_optimizer_ms = float(ref_buckets.get("optimizer_ms", 0.0)) / max(steps, 1)
     tri_optimizer_ms = float(tri_buckets.get("optimizer_ms", 0.0)) / max(steps, 1)
 
-    triton_sdpa_total_ms = tri_sdpa_fwd_ms + bwd_total_ms
+    triton_sdpa_total_ms = tri_sdpa_fwd_ms + bwd_ms_per_step
     reference_sdpa_total_ms = ref_sdpa_fwd_ms
     triton_non_sdpa_ms = tri_ms - triton_sdpa_total_ms
     reference_non_sdpa_ms = ref_ms - reference_sdpa_total_ms
@@ -156,7 +158,9 @@ def _run_attention_breakdown_onpath(
         "reference_step_total_ms": ref_ms,
         "triton_step_total_ms": tri_ms,
         "profile_calls": float(calls),
+        "calls_per_step": calls_per_step,
         "bwd_total_ms": bwd_total_ms,
+        "bwd_ms_per_step": bwd_ms_per_step,
         "delta_path_ms": delta_ms,
         "dq_ms": dq_ms,
         "dk_dv_ms": dk_dv_ms,
@@ -305,7 +309,9 @@ def main() -> None:
         "reference_step_total_ms",
         "triton_step_total_ms",
         "profile_calls",
+        "calls_per_step",
         "bwd_total_ms",
+        "bwd_ms_per_step",
         "delta_path_ms",
         "dq_ms",
         "dk_dv_ms",
@@ -358,7 +364,7 @@ def main() -> None:
             "  triton:    sdpa_fwd_ms_per_step={tf:.4f} sdpa_bwd_ms_per_step={tb:.4f} "
             "sdpa_total_ms_per_step={tst:.4f} non_sdpa_ms_per_step={tn:.4f}".format(
                 tf=breakdown["triton_sdpa_fwd_ms_per_step"],
-                tb=breakdown["bwd_total_ms"],
+                tb=breakdown["bwd_ms_per_step"],
                 tst=breakdown["triton_sdpa_total_ms_per_step"],
                 tn=breakdown["triton_non_sdpa_ms_per_step"],
             )
@@ -369,6 +375,12 @@ def main() -> None:
                 dq=breakdown["dq_ms"],
                 dkdv=breakdown["dk_dv_ms"],
                 sh=breakdown["shared_ms"],
+            )
+        )
+        print(
+            "  bwd_call_stats: calls={calls:.0f} calls_per_step={cps:.2f}".format(
+                calls=breakdown["profile_calls"],
+                cps=breakdown["calls_per_step"],
             )
         )
         print(
@@ -384,7 +396,12 @@ def main() -> None:
                 tri_opt=breakdown["triton_optimizer_ms_per_step"],
             )
         )
-        print(f"  bwd_total_ms={breakdown['bwd_total_ms']:.4f} profile_calls={breakdown['profile_calls']:.0f}")
+        print(
+            "  bwd_total_ms_per_call={bwd:.4f} bwd_ms_per_step={bwd_step:.4f}".format(
+                bwd=breakdown["bwd_total_ms"],
+                bwd_step=breakdown["bwd_ms_per_step"],
+            )
+        )
         print(f"delta_vs_reference_ms={breakdown['delta_vs_reference_ms']:.4f}")
     else:
         print("\n=== Attention Breakdown ===")
@@ -404,7 +421,9 @@ def main() -> None:
                 "breakdown_reference_step_total_ms",
                 "breakdown_triton_step_total_ms",
                 "breakdown_profile_calls",
+                "breakdown_calls_per_step",
                 "breakdown_bwd_total_ms",
+                "breakdown_bwd_ms_per_step",
                 "breakdown_delta_path_ms",
                 "breakdown_dq_ms",
                 "breakdown_dk_dv_ms",
@@ -438,7 +457,9 @@ def main() -> None:
                         "breakdown_reference_step_total_ms": breakdown["reference_step_total_ms"],
                         "breakdown_triton_step_total_ms": breakdown["triton_step_total_ms"],
                         "breakdown_profile_calls": breakdown["profile_calls"],
+                        "breakdown_calls_per_step": breakdown["calls_per_step"],
                         "breakdown_bwd_total_ms": breakdown["bwd_total_ms"],
+                        "breakdown_bwd_ms_per_step": breakdown["bwd_ms_per_step"],
                         "breakdown_delta_path_ms": breakdown["delta_path_ms"],
                         "breakdown_dq_ms": breakdown["dq_ms"],
                         "breakdown_dk_dv_ms": breakdown["dk_dv_ms"],

@@ -12,6 +12,8 @@ Constraints (v0):
 - Contiguous inputs
 """
 
+from typing import Optional
+import os
 import torch
 import triton
 import triton.language as tl
@@ -118,6 +120,107 @@ def _compute_row_delta(q, k, v, dout, m, l, scale):
     p = torch.exp(scores - m.unsqueeze(-1)) / torch.clamp(l.unsqueeze(-1), min=1e-12)
     out = torch.matmul(p, vf)
     return (dof * out).sum(dim=-1).contiguous()
+
+
+@triton.jit
+def _rowwise_delta_kernel(
+    DO,
+    OUT,
+    DELTA,
+    T,
+    D,
+    Hdim,
+    stride_dob,
+    stride_doh,
+    stride_dot,
+    stride_dod,
+    stride_ob,
+    stride_oh,
+    stride_ot,
+    stride_od,
+    stride_del_b,
+    stride_del_h,
+    stride_del_t,
+    BLOCK_M: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_m = tl.program_id(1)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, BLOCK_D)
+    mask_m = offs_m < T
+    mask_d = offs_d < D
+
+    b = pid_bh // Hdim
+    h = pid_bh - b * Hdim
+
+    do_ptrs = (
+        DO
+        + b * stride_dob
+        + h * stride_doh
+        + offs_m[:, None] * stride_dot
+        + offs_d[None, :] * stride_dod
+    )
+    out_ptrs = (
+        OUT
+        + b * stride_ob
+        + h * stride_oh
+        + offs_m[:, None] * stride_ot
+        + offs_d[None, :] * stride_od
+    )
+
+    do = tl.load(do_ptrs, mask=mask_m[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+    out = tl.load(out_ptrs, mask=mask_m[:, None] & mask_d[None, :], other=0.0).to(tl.float32)
+    acc = tl.sum(do * out, axis=1)
+
+    delta_ptrs = (
+        DELTA
+        + b * stride_del_b
+        + h * stride_del_h
+        + offs_m * stride_del_t
+    )
+    tl.store(delta_ptrs, acc, mask=mask_m)
+
+
+def compute_row_delta_triton(dout: torch.Tensor, out: torch.Tensor, delta_out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Compute row-wise delta = sum_d(dO * O) using a Triton kernel.
+
+    This avoids Python-side fp32 materialization and keeps the delta path on-device.
+    """
+    if dout.shape != out.shape:
+        raise AssertionError("dout and out must have the same shape")
+    B, H, T, D = out.shape
+    if D > 64:
+        raise AssertionError("rowwise delta kernel assumes D <= 64")
+    if delta_out is None:
+        delta_out = torch.empty((B, H, T), device=out.device, dtype=torch.float32)
+    if delta_out.shape != (B, H, T):
+        raise AssertionError("delta_out must have shape (B,H,T)")
+
+    grid = (B * H, triton.cdiv(T, 64))
+    _rowwise_delta_kernel[grid](
+        dout,
+        out,
+        delta_out,
+        T,
+        D,
+        H,
+        dout.stride(0),
+        dout.stride(1),
+        dout.stride(2),
+        dout.stride(3),
+        out.stride(0),
+        out.stride(1),
+        out.stride(2),
+        out.stride(3),
+        delta_out.stride(0),
+        delta_out.stride(1),
+        delta_out.stride(2),
+        BLOCK_M=64,
+        BLOCK_D=64,
+    )
+    return delta_out
 
 
 def sdpa_bwd_shared_staged(q, k, v, dout, m, l, scale, delta=None, block_m: int = 64):
@@ -516,8 +619,17 @@ def sdpa_bwd_dk(q, k, v, dout, m, l, scale, delta=None):
     return dk
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_D": 32}, num_warps=4, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_D": 32}, num_warps=8, num_stages=2),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32, "BLOCK_D": 32}, num_warps=8, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_D": 64}, num_warps=8, num_stages=2),
+    ],
+    key=["Tq", "Tk", "D"],
+)
 @triton.jit
-def _sdpa_bwd_dk_dv_kernel(
+def _sdpa_bwd_dk_dv_kernel_autotune(
     Q, K, V, DO, DK, DV, M, L, DELTA,
     Tq, Tk, D, Hdim,
     stride_qbh, stride_qm, stride_qk,
@@ -618,16 +730,227 @@ def _sdpa_bwd_dk_dv_kernel(
     tl.store(dv_ptrs, dv_acc, mask=mask)
 
 
-def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=None):
+@triton.jit
+def _sdpa_bwd_dk_dv_kernel(
+    Q, K, V, DO, DK, DV, M, L, DELTA,
+    Tq, Tk, D, Hdim,
+    stride_qbh, stride_qm, stride_qk,
+    stride_kbh, stride_kn, stride_kk,
+    stride_vbh, stride_vn, stride_vk,
+    stride_dob, stride_doh, stride_dot, stride_dod,
+    stride_dkbh, stride_dkn, stride_dkk,
+    stride_dvbh, stride_dvn, stride_dvk,
+    stride_mbh, stride_mt,
+    stride_lbh, stride_lt,
+    stride_dbh, stride_dt,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    offs_m = tl.arange(0, BLOCK_M)[:, None]
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_D)
+
+    q_ptrs_base = Q + pid_bh * stride_qbh
+    b = pid_bh // Hdim
+    h = pid_bh % Hdim
+    do_ptrs_base = DO + b * stride_dob + h * stride_doh
+    k_ptrs_base = K + pid_bh * stride_kbh
+    v_ptrs_base = V + pid_bh * stride_vbh
+    m_ptrs_base = M + pid_bh * stride_mbh
+    l_ptrs_base = L + pid_bh * stride_lbh
+    d_ptrs_base = DELTA + pid_bh * stride_dbh
+
+    dk_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+    dv_acc = tl.zeros((BLOCK_N, BLOCK_D), dtype=tl.float32)
+
+    k_ptrs = k_ptrs_base + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    v_ptrs = v_ptrs_base + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vk
+    k = tl.load(
+        k_ptrs,
+        mask=(offs_n[:, None] < Tk) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+    v = tl.load(
+        v_ptrs,
+        mask=(offs_n[:, None] < Tk) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+
+    for m0 in range(0, Tq, BLOCK_M):
+        q_ptrs = q_ptrs_base + (m0 + offs_m) * stride_qm + offs_d[None, :] * stride_qk
+        q = tl.load(
+            q_ptrs,
+            mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+        delta = tl.load(
+            d_ptrs_base + (m0 + offs_m) * stride_dt,
+            mask=((m0 + offs_m) < Tq),
+            other=0.0,
+        ).to(tl.float32)
+
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale
+        m_idx = m0 + offs_m
+        m_mask = (m_idx < Tq)
+        m_mask_f = m_mask.to(tl.float32)
+        m_block = tl.load(m_ptrs_base + m_idx * stride_mt).to(tl.float32)
+        l_block = tl.load(l_ptrs_base + m_idx * stride_lt).to(tl.float32)
+        m_block = m_block * m_mask_f
+        l_block = l_block * m_mask_f + (1.0 - m_mask_f)
+        mask_m = m_mask_f
+        mask_n = (offs_n < Tk).to(tl.float32)[None, :]
+        mask_mn = mask_m * mask_n
+        scores = scores - m_block
+        scores = scores * mask_mn + (-1.0e9) * (1.0 - mask_mn)
+        p = tl.exp(scores) * mask_mn
+        l_block = tl.maximum(l_block, 1e-12)
+        p = p / l_block
+
+        do_ptrs = do_ptrs_base + (m0 + offs_m) * stride_dot + offs_d[None, :] * stride_dod
+        do = tl.load(
+            do_ptrs,
+            mask=((m0 + offs_m) < Tq) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+
+        dv_acc += tl.dot(tl.trans(p), do, out_dtype=tl.float32, input_precision="ieee")
+
+        dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32, input_precision="ieee")
+        ds = p * (dp - delta)
+        dk_acc += tl.dot(tl.trans(ds), q, out_dtype=tl.float32, input_precision="ieee") * scale
+
+    mask = (offs_n[:, None] < Tk) & (offs_d[None, :] < D)
+    dk_ptrs = DK + pid_bh * stride_dkbh + offs_n[:, None] * stride_dkn + offs_d[None, :] * stride_dkk
+    dv_ptrs = DV + pid_bh * stride_dvbh + offs_n[:, None] * stride_dvn + offs_d[None, :] * stride_dvk
+    tl.store(dk_ptrs, dk_acc, mask=mask)
+    tl.store(dv_ptrs, dv_acc, mask=mask)
+
+
+@triton.jit
+def _sdpa_bwd_dq_dk_dv_kernel(
+    Q, K, V, DO, DQ, DK, DV, M, L, DELTA,
+    Tq, Tk, D, Hdim,
+    stride_qbh, stride_qm, stride_qk,
+    stride_kbh, stride_kn, stride_kk,
+    stride_vbh, stride_vn, stride_vk,
+    stride_dob, stride_doh, stride_dot, stride_dod,
+    stride_dqbh, stride_dqm, stride_dqk,
+    stride_dkbh, stride_dkn, stride_dkk,
+    stride_dvbh, stride_dvn, stride_dvk,
+    stride_mbh, stride_mt,
+    stride_lbh, stride_lt,
+    stride_dbh, stride_dt,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_m = tl.program_id(1)
+
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None]
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_D)
+
+    q_ptrs_base = Q + pid_bh * stride_qbh
+    b = pid_bh // Hdim
+    h = pid_bh % Hdim
+    do_ptrs_base = DO + b * stride_dob + h * stride_doh
+    k_ptrs_base = K + pid_bh * stride_kbh
+    v_ptrs_base = V + pid_bh * stride_vbh
+    m_ptrs_base = M + pid_bh * stride_mbh
+    l_ptrs_base = L + pid_bh * stride_lbh
+    d_ptrs_base = DELTA + pid_bh * stride_dbh
+
+    # Load q / do / delta for this query block.
+    q_ptrs = q_ptrs_base + offs_m * stride_qm + offs_d[None, :] * stride_qk
+    q = tl.load(
+        q_ptrs,
+        mask=(offs_m < Tq) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+    do_ptrs = do_ptrs_base + offs_m * stride_dot + offs_d[None, :] * stride_dod
+    do = tl.load(
+        do_ptrs,
+        mask=(offs_m < Tq) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+    delta = tl.load(
+        d_ptrs_base + offs_m * stride_dt,
+        mask=(offs_m < Tq),
+        other=0.0,
+    ).to(tl.float32)
+
+    dq_acc = tl.zeros((BLOCK_M, BLOCK_D), dtype=tl.float32)
+
+    for n0 in range(0, Tk, BLOCK_N):
+        k_ptrs = k_ptrs_base + (n0 + offs_n)[:, None] * stride_kn + offs_d[None, :] * stride_kk
+        v_ptrs = v_ptrs_base + (n0 + offs_n)[:, None] * stride_vn + offs_d[None, :] * stride_vk
+
+        k = tl.load(
+            k_ptrs,
+            mask=((n0 + offs_n)[:, None] < Tk) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+        v = tl.load(
+            v_ptrs,
+            mask=((n0 + offs_n)[:, None] < Tk) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale
+        m_idx = offs_m
+        m_mask = (m_idx < Tq)
+        m_mask_f = m_mask.to(tl.float32)
+        m_block = tl.load(m_ptrs_base + m_idx * stride_mt).to(tl.float32)
+        l_block = tl.load(l_ptrs_base + m_idx * stride_lt).to(tl.float32)
+        m_block = m_block * m_mask_f
+        l_block = l_block * m_mask_f + (1.0 - m_mask_f)
+        mask_m = m_mask_f
+        mask_n = ((n0 + offs_n) < Tk).to(tl.float32)[None, :]
+        mask_mn_f = mask_m * mask_n
+        scores = scores - m_block
+        scores = scores * mask_mn_f + (-1.0e9) * (1.0 - mask_mn_f)
+        p = tl.exp(scores) * mask_mn_f
+        p = p / tl.maximum(l_block, 1e-12)
+
+        dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32, input_precision="ieee")
+        ds = p * (dp - delta)
+
+        # dQ for this query block.
+        dq_acc += tl.dot(ds, k, out_dtype=tl.float32, input_precision="ieee") * scale
+
+        # dK/dV accumulate across query blocks (atomic add).
+        dk_block = tl.dot(tl.trans(ds), q, out_dtype=tl.float32, input_precision="ieee") * scale
+        dv_block = tl.dot(tl.trans(p), do, out_dtype=tl.float32, input_precision="ieee")
+        dk_ptrs = DK + pid_bh * stride_dkbh + (n0 + offs_n)[:, None] * stride_dkn + offs_d[None, :] * stride_dkk
+        dv_ptrs = DV + pid_bh * stride_dvbh + (n0 + offs_n)[:, None] * stride_dvn + offs_d[None, :] * stride_dvk
+        mask_nd = ((n0 + offs_n)[:, None] < Tk) & (offs_d[None, :] < D)
+        tl.atomic_add(dk_ptrs, dk_block, mask=mask_nd)
+        tl.atomic_add(dv_ptrs, dv_block, mask=mask_nd)
+
+    dq_ptrs = DQ + pid_bh * stride_dqbh + offs_m * stride_dqm + offs_d[None, :] * stride_dqk
+    tl.store(dq_ptrs, dq_acc, mask=(offs_m < Tq) & (offs_d[None, :] < D))
+
+
+def sdpa_bwd_dq_dk_dv_shared(q, k, v, dout, m, l, scale, delta=None, dq_out=None, dk_out=None, dv_out=None):
     """
-    Compute dK and dV in one Triton pass for a fixed key block.
-    This reduces kernel launches and shared-memory traffic vs separate dk/dv paths.
+    Compute dQ, dK, dV in one Triton pass per query block, reusing softmax reconstruction.
+    Uses atomic adds for dK/dV accumulation across query blocks.
     """
     _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
     B, H, T, D = q.shape
     M = k.shape[2]
+    dq = dq_out if dq_out is not None else torch.empty_like(q)
     dk = dk_out if dk_out is not None else torch.empty_like(k)
     dv = dv_out if dv_out is not None else torch.empty_like(v)
+    if dq.shape != q.shape or dq.dtype != q.dtype or dq.device != q.device:
+        raise AssertionError("dq_out must match q shape/device/dtype")
     if dk.shape != k.shape or dk.dtype != k.dtype or dk.device != k.device:
         raise AssertionError("dk_out must match k shape/device/dtype")
     if dv.shape != v.shape or dv.dtype != v.dtype or dv.device != v.device:
@@ -637,9 +960,14 @@ def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=N
     if delta.shape != (B, H, T):
         raise AssertionError("delta must have shape (B,H,T)")
 
+    # Zero-initialize dk/dv for atomic accumulation.
+    dk.zero_()
+    dv.zero_()
+
     q_ = q.reshape(B * H, T, D)
     k_ = k.reshape(B * H, M, D)
     v_ = v.reshape(B * H, M, D)
+    dq_ = dq.reshape(B * H, T, D)
     dk_ = dk.reshape(B * H, M, D)
     dv_ = dv.reshape(B * H, M, D)
     m_ = m.reshape(B * H, T)
@@ -651,14 +979,15 @@ def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=N
     BLOCK_D = 32 if D <= 32 else 64
     grid = (
         B * H,
-        triton.cdiv(M, BLOCK_N),
+        triton.cdiv(T, BLOCK_M),
     )
 
-    _sdpa_bwd_dk_dv_kernel[grid](
+    _sdpa_bwd_dq_dk_dv_kernel[grid](
         q_,
         k_,
         v_,
         dout,
+        dq_,
         dk_,
         dv_,
         m_,
@@ -681,6 +1010,9 @@ def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=N
         dout.stride(1),
         dout.stride(2),
         dout.stride(3),
+        dq_.stride(0),
+        dq_.stride(1),
+        dq_.stride(2),
         dk_.stride(0),
         dk_.stride(1),
         dk_.stride(2),
@@ -700,6 +1032,138 @@ def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=N
         num_warps=4,
         num_stages=1,
     )
+
+    return dq, dk, dv
+
+def sdpa_bwd_dk_dv(q, k, v, dout, m, l, scale, delta=None, dk_out=None, dv_out=None):
+    """
+    Compute dK and dV in one Triton pass for a fixed key block.
+    This reduces kernel launches and shared-memory traffic vs separate dk/dv paths.
+    """
+    _assert_backward_contract(q, k, v, dout, m, l, require_v=True)
+    B, H, T, D = q.shape
+    M = k.shape[2]
+    dk = dk_out if dk_out is not None else torch.empty_like(k)
+    dv = dv_out if dv_out is not None else torch.empty_like(v)
+    if dk.shape != k.shape or dk.dtype != k.dtype or dk.device != k.device:
+        raise AssertionError("dk_out must match k shape/device/dtype")
+    if dv.shape != v.shape or dv.dtype != v.dtype or dv.device != v.device:
+        raise AssertionError("dv_out must match v shape/device/dtype")
+    if delta is None:
+        delta = _compute_row_delta(q, k, v, dout, m, l, scale)
+    if delta.shape != (B, H, T):
+        raise AssertionError("delta must have shape (B,H,T)")
+
+    use_autotune = os.environ.get("THERIA_SDPA_BWD_AUTOTUNE", "0") != "0"
+    q_ = q.reshape(B * H, T, D)
+    k_ = k.reshape(B * H, M, D)
+    v_ = v.reshape(B * H, M, D)
+    dk_ = dk.reshape(B * H, M, D)
+    dv_ = dv.reshape(B * H, M, D)
+    m_ = m.reshape(B * H, T)
+    l_ = l.reshape(B * H, T)
+    delta_ = delta.reshape(B * H, T).contiguous()
+
+    if use_autotune:
+        grid = lambda META: (
+            B * H,
+            triton.cdiv(M, META["BLOCK_N"]),
+        )
+        _sdpa_bwd_dk_dv_kernel_autotune[grid](
+            q_,
+            k_,
+            v_,
+            dout,
+            dk_,
+            dv_,
+            m_,
+            l_,
+            delta_,
+            T,
+            M,
+            D,
+            H,
+            q_.stride(0),
+            q_.stride(1),
+            q_.stride(2),
+            k_.stride(0),
+            k_.stride(1),
+            k_.stride(2),
+            v_.stride(0),
+            v_.stride(1),
+            v_.stride(2),
+            dout.stride(0),
+            dout.stride(1),
+            dout.stride(2),
+            dout.stride(3),
+            dk_.stride(0),
+            dk_.stride(1),
+            dk_.stride(2),
+            dv_.stride(0),
+            dv_.stride(1),
+            dv_.stride(2),
+            m_.stride(0),
+            m_.stride(1),
+            l_.stride(0),
+            l_.stride(1),
+            delta_.stride(0),
+            delta_.stride(1),
+            scale,
+        )
+    else:
+        BLOCK_M = 64 if T >= 256 else 32
+        BLOCK_N = 32
+        BLOCK_D = 32 if D <= 32 else 64
+        grid = (
+            B * H,
+            triton.cdiv(M, BLOCK_N),
+        )
+        _sdpa_bwd_dk_dv_kernel[grid](
+            q_,
+            k_,
+            v_,
+            dout,
+            dk_,
+            dv_,
+            m_,
+            l_,
+            delta_,
+            T,
+            M,
+            D,
+            H,
+            q_.stride(0),
+            q_.stride(1),
+            q_.stride(2),
+            k_.stride(0),
+            k_.stride(1),
+            k_.stride(2),
+            v_.stride(0),
+            v_.stride(1),
+            v_.stride(2),
+            dout.stride(0),
+            dout.stride(1),
+            dout.stride(2),
+            dout.stride(3),
+            dk_.stride(0),
+            dk_.stride(1),
+            dk_.stride(2),
+            dv_.stride(0),
+            dv_.stride(1),
+            dv_.stride(2),
+            m_.stride(0),
+            m_.stride(1),
+            l_.stride(0),
+            l_.stride(1),
+            delta_.stride(0),
+            delta_.stride(1),
+            scale,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            BLOCK_D=BLOCK_D,
+            num_warps=4,
+            num_stages=1,
+        )
 
     return dk, dv
 
@@ -744,8 +1208,17 @@ def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     dO = torch.matmul(dP, vf) + torch.matmul(P, dvf)
     return dO.to(q.dtype)
 
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_D": 32}, num_warps=4, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_D": 32}, num_warps=8, num_stages=2),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 32, "BLOCK_D": 32}, num_warps=8, num_stages=2),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_D": 64}, num_warps=8, num_stages=2),
+    ],
+    key=["Tq", "Tk", "D"],
+)
 @triton.jit
-def _sdpa_bwd_dq_kernel(
+def _sdpa_bwd_dq_kernel_autotune(
     Q, K, V, DO, DQ, M, L, DELTA,
     Tq, Tk, D, Hdim,
     stride_qbh, stride_qm, stride_qk,
@@ -838,6 +1311,98 @@ def _sdpa_bwd_dq_kernel(
     tl.store(dq_ptrs, dq_acc, mask=(offs_m < Tq) & (offs_d[None, :] < D))
 
 
+@triton.jit
+def _sdpa_bwd_dq_kernel(
+    Q, K, V, DO, DQ, M, L, DELTA,
+    Tq, Tk, D, Hdim,
+    stride_qbh, stride_qm, stride_qk,
+    stride_kbh, stride_kn, stride_kk,
+    stride_vbh, stride_vn, stride_vk,
+    stride_dob, stride_doh, stride_dot, stride_dod,
+    stride_dqbh, stride_dqm, stride_dqk,
+    stride_mbh, stride_mt,
+    stride_lbh, stride_lt,
+    stride_dbh, stride_dt,
+    scale,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    pid_m = tl.program_id(1)
+
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M))[:, None]
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, BLOCK_D)
+
+    q_ptrs_base = Q + pid_bh * stride_qbh
+    b = pid_bh // Hdim
+    h = pid_bh % Hdim
+    do_ptrs_base = DO + b * stride_dob + h * stride_doh
+    k_ptrs_base = K + pid_bh * stride_kbh
+    v_ptrs_base = V + pid_bh * stride_vbh
+    m_ptrs_base = M + pid_bh * stride_mbh
+    l_ptrs_base = L + pid_bh * stride_lbh
+    d_ptrs_base = DELTA + pid_bh * stride_dbh
+
+    q_ptrs = q_ptrs_base + offs_m * stride_qm + offs_d[None, :] * stride_qk
+    q = tl.load(
+        q_ptrs,
+        mask=(offs_m < Tq) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+    delta = tl.load(
+        d_ptrs_base + offs_m * stride_dt,
+        mask=(offs_m < Tq),
+        other=0.0,
+    ).to(tl.float32)
+    do_ptrs = do_ptrs_base + offs_m * stride_dot + offs_d[None, :] * stride_dod
+    do = tl.load(
+        do_ptrs,
+        mask=(offs_m < Tq) & (offs_d[None, :] < D),
+        other=0.0,
+    ).to(tl.float32)
+
+    dq_acc = tl.zeros((BLOCK_M, BLOCK_D), dtype=tl.float32)
+    for n0 in range(0, Tk, BLOCK_N):
+        k_ptrs = k_ptrs_base + (n0 + offs_n)[:, None] * stride_kn + offs_d[None, :] * stride_kk
+        v_ptrs = v_ptrs_base + (n0 + offs_n)[:, None] * stride_vn + offs_d[None, :] * stride_vk
+
+        k = tl.load(
+            k_ptrs,
+            mask=((n0 + offs_n)[:, None] < Tk) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+        v = tl.load(
+            v_ptrs,
+            mask=((n0 + offs_n)[:, None] < Tk) & (offs_d[None, :] < D),
+            other=0.0,
+        ).to(tl.float32)
+
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale
+        m_idx = offs_m
+        m_mask = (m_idx < Tq)
+        m_mask_f = m_mask.to(tl.float32)
+        m_block = tl.load(m_ptrs_base + m_idx * stride_mt).to(tl.float32)
+        l_block = tl.load(l_ptrs_base + m_idx * stride_lt).to(tl.float32)
+        m_block = m_block * m_mask_f
+        l_block = l_block * m_mask_f + (1.0 - m_mask_f)
+        mask_m = m_mask_f
+        mask_n = ((n0 + offs_n) < Tk).to(tl.float32)[None, :]
+        mask_mn_f = mask_m * mask_n
+        scores = scores - m_block
+        scores = scores * mask_mn_f + (-1.0e9) * (1.0 - mask_mn_f)
+        p = tl.exp(scores) * mask_mn_f
+        p = p / tl.maximum(l_block, 1e-12)
+
+        dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32, input_precision="ieee")
+        ds = p * (dp - delta)
+        dq_acc += tl.dot(ds, k, out_dtype=tl.float32, input_precision="ieee") * scale
+
+    dq_ptrs = DQ + pid_bh * stride_dqbh + offs_m * stride_dqm + offs_d[None, :] * stride_dqk
+    tl.store(dq_ptrs, dq_acc, mask=(offs_m < Tq) & (offs_d[None, :] < D))
+
+
 def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None, dq_out=None):
     """
     Compute dQ for SDPA using saved (m, l). Dv == D assumed.
@@ -853,6 +1418,7 @@ def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None, dq_out=None):
     if delta.shape != (B, H, T):
         raise AssertionError("delta must have shape (B,H,T)")
 
+    use_autotune = os.environ.get("THERIA_SDPA_BWD_AUTOTUNE", "0") != "0"
     q_ = q.reshape(B * H, T, D)
     k_ = k.reshape(B * H, M, D)
     v_ = v.reshape(B * H, M, D)
@@ -861,56 +1427,98 @@ def sdpa_bwd_dq(q, k, v, dout, m, l, scale, delta=None, dq_out=None):
     l_ = l.reshape(B * H, T)
     delta_ = delta.reshape(B * H, T).contiguous()
 
-    BLOCK_M = 64 if T >= 256 else 32
-    BLOCK_N = 32
-    BLOCK_D = 32 if D <= 32 else 64
-    grid = (
-        B * H,
-        triton.cdiv(T, BLOCK_M),
-    )
-
-    _sdpa_bwd_dq_kernel[grid](
-        q_,
-        k_,
-        v_,
-        dout,
-        dq_,
-        m_,
-        l_,
-        delta_,
-        T,
-        M,
-        D,
-        H,
-        q_.stride(0),
-        q_.stride(1),
-        q_.stride(2),
-        k_.stride(0),
-        k_.stride(1),
-        k_.stride(2),
-        v_.stride(0),
-        v_.stride(1),
-        v_.stride(2),
-        dout.stride(0),
-        dout.stride(1),
-        dout.stride(2),
-        dout.stride(3),
-        dq_.stride(0),
-        dq_.stride(1),
-        dq_.stride(2),
-        m_.stride(0),
-        m_.stride(1),
-        l_.stride(0),
-        l_.stride(1),
-        delta_.stride(0),
-        delta_.stride(1),
-        scale,
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        BLOCK_D=BLOCK_D,
-        num_warps=4,
-        num_stages=1,
-    )
+    if use_autotune:
+        grid = lambda META: (
+            B * H,
+            triton.cdiv(T, META["BLOCK_M"]),
+        )
+        _sdpa_bwd_dq_kernel_autotune[grid](
+            q_,
+            k_,
+            v_,
+            dout,
+            dq_,
+            m_,
+            l_,
+            delta_,
+            T,
+            M,
+            D,
+            H,
+            q_.stride(0),
+            q_.stride(1),
+            q_.stride(2),
+            k_.stride(0),
+            k_.stride(1),
+            k_.stride(2),
+            v_.stride(0),
+            v_.stride(1),
+            v_.stride(2),
+            dout.stride(0),
+            dout.stride(1),
+            dout.stride(2),
+            dout.stride(3),
+            dq_.stride(0),
+            dq_.stride(1),
+            dq_.stride(2),
+            m_.stride(0),
+            m_.stride(1),
+            l_.stride(0),
+            l_.stride(1),
+            delta_.stride(0),
+            delta_.stride(1),
+            scale,
+        )
+    else:
+        BLOCK_M = 64 if T >= 256 else 32
+        BLOCK_N = 32
+        BLOCK_D = 32 if D <= 32 else 64
+        grid = (
+            B * H,
+            triton.cdiv(T, BLOCK_M),
+        )
+        _sdpa_bwd_dq_kernel[grid](
+            q_,
+            k_,
+            v_,
+            dout,
+            dq_,
+            m_,
+            l_,
+            delta_,
+            T,
+            M,
+            D,
+            H,
+            q_.stride(0),
+            q_.stride(1),
+            q_.stride(2),
+            k_.stride(0),
+            k_.stride(1),
+            k_.stride(2),
+            v_.stride(0),
+            v_.stride(1),
+            v_.stride(2),
+            dout.stride(0),
+            dout.stride(1),
+            dout.stride(2),
+            dout.stride(3),
+            dq_.stride(0),
+            dq_.stride(1),
+            dq_.stride(2),
+            m_.stride(0),
+            m_.stride(1),
+            l_.stride(0),
+            l_.stride(1),
+            delta_.stride(0),
+            delta_.stride(1),
+            scale,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            BLOCK_D=BLOCK_D,
+            num_warps=4,
+            num_stages=1,
+        )
 
     return dq
 

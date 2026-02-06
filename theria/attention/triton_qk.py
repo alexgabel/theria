@@ -13,7 +13,9 @@ import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
 from theria.attention.triton_sdpa_backward import (
+    compute_row_delta_triton,
     sdpa_bwd_dq,
+    sdpa_bwd_dq_dk_dv_shared,
     sdpa_bwd_dk_dv,
     sdpa_bwd_shared_staged,
 )
@@ -53,8 +55,6 @@ def _get_bwd_reuse_buffers(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) ->
     if cached is None:
         cached = {
             "delta": torch.empty((B, H, T), device=q.device, dtype=torch.float32),
-            # Reused for elementwise grad_out * out before row-sum.
-            "delta_tmp": torch.empty_like(q),
             "dq": torch.empty_like(q),
             "dk": torch.empty_like(k),
             "dv": torch.empty_like(v),
@@ -451,17 +451,23 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
             ev_delta_start.record()
         if reuse_buffers is not None:
             delta = reuse_buffers["delta"]
-            delta_tmp = reuse_buffers["delta_tmp"]
-            torch.mul(grad_out, out, out=delta_tmp)
-            torch.sum(delta_tmp, dim=-1, dtype=torch.float32, out=delta)
+            compute_row_delta_triton(grad_out, out, delta_out=delta)
         else:
-            delta = (grad_out.float() * out.float()).sum(dim=-1).contiguous()
+            delta = compute_row_delta_triton(grad_out, out)
         if profile_bwd:
             ev_delta_end.record()
 
         # Default to legacy Triton-kernel backward path: currently faster in benchmarks.
-        use_shared = os.environ.get("THERIA_SDPA_BWD_SHARED", "0") != "0"
-        if use_shared:
+        shared_mode = os.environ.get("THERIA_SDPA_BWD_SHARED", "0")
+        if shared_mode == "2":
+            if profile_bwd:
+                ev_shared_start = torch.cuda.Event(enable_timing=True)
+                ev_shared_end = torch.cuda.Event(enable_timing=True)
+                ev_shared_start.record()
+            dq, dk, dv = sdpa_bwd_dq_dk_dv_shared(q, k, v, grad_out, m, l, scale, delta=delta)
+            if profile_bwd:
+                ev_shared_end.record()
+        elif shared_mode != "0":
             # Shared staged path: reconstruct softmax terms once per query chunk.
             if profile_bwd:
                 ev_shared_start = torch.cuda.Event(enable_timing=True)
@@ -498,11 +504,11 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
             if not torch.cuda.is_current_stream_capturing():
                 torch.cuda.synchronize(dev)
             _TRITON_SDPA_BWD_PROFILE["calls"] += 1
-            if use_shared:
+            if shared_mode != "0":
                 _TRITON_SDPA_BWD_PROFILE["use_shared_calls"] += 1
             _TRITON_SDPA_BWD_PROFILE["total_bwd_ms_sum"] += float(ev_total_start.elapsed_time(ev_total_end))
             _TRITON_SDPA_BWD_PROFILE["delta_ms_sum"] += float(ev_delta_start.elapsed_time(ev_delta_end))
-            if use_shared:
+            if shared_mode != "0":
                 _TRITON_SDPA_BWD_PROFILE["shared_ms_sum"] += float(ev_shared_start.elapsed_time(ev_shared_end))
             else:
                 _TRITON_SDPA_BWD_PROFILE["dq_ms_sum"] += float(ev_dq_start.elapsed_time(ev_dq_end))
