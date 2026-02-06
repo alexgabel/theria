@@ -436,7 +436,11 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
         scale = 1.0 / (q.shape[-1] ** 0.5)
         use_reuse = os.environ.get("THERIA_SDPA_BWD_REUSE", "0") != "0"
         reuse_buffers = _get_bwd_reuse_buffers(q, k, v) if use_reuse else None
-        profile_bwd = os.environ.get("THERIA_SDPA_PROFILE_BWD", "0") != "0" and grad_out.is_cuda
+        profile_bwd = (
+            os.environ.get("THERIA_SDPA_PROFILE_BWD", "0") != "0"
+            and grad_out.is_cuda
+            and not torch.cuda.is_current_stream_capturing()
+        )
         if profile_bwd:
             dev = grad_out.device
             ev_total_start = torch.cuda.Event(enable_timing=True)
@@ -491,7 +495,8 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
 
         if profile_bwd:
             ev_total_end.record()
-            torch.cuda.synchronize(dev)
+            if not torch.cuda.is_current_stream_capturing():
+                torch.cuda.synchronize(dev)
             _TRITON_SDPA_BWD_PROFILE["calls"] += 1
             if use_shared:
                 _TRITON_SDPA_BWD_PROFILE["use_shared_calls"] += 1

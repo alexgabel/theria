@@ -83,6 +83,7 @@ def _run_attention_breakdown_onpath(
 
     minimal.reset_step_profile()
     os.environ["THERIA_SDPA_PROFILE_BWD"] = "0"
+    # Breakdown instrumentation uses explicit sync/event timing; keep CUDA graph off.
     ref = minimal.benchmark_backend(
         backend="reference",
         device=device,
@@ -99,7 +100,7 @@ def _run_attention_breakdown_onpath(
         warmup_steps=warmup,
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
-        cuda_graph=cuda_graph,
+        cuda_graph=False,
     )
     ref_buckets = minimal.get_step_profile()
 
@@ -122,7 +123,7 @@ def _run_attention_breakdown_onpath(
         warmup_steps=warmup,
         bench_steps=steps,
         symmetric_layout=symmetric_layout,
-        cuda_graph=cuda_graph,
+        cuda_graph=False,
     )
     tri_buckets = minimal.get_step_profile()
     profile = get_triton_sdpa_bwd_profile()
@@ -300,66 +301,94 @@ def main() -> None:
         f"(mean={sp_s['mean']:.3f}x)"
     )
 
-    breakdown = _run_attention_breakdown_onpath(
-        minimal=minimal,
-        seed=args.seed + 10_000,
-        d_model=args.d_model,
-        batch_size=args.batch_size,
-        n_heads=args.n_heads,
-        d_ff=args.d_ff,
-        n_layers=args.n_layers,
-        vocab_size=args.vocab_size,
-        num_classes=args.num_classes,
-        seq_len=args.seq_len,
-        lr=args.lr,
-        warmup=args.breakdown_warmup,
-        steps=args.breakdown_steps,
-        symmetric_layout=args.benchmark_symmetric_layout,
-        cuda_graph=args.bench_cuda_graph,
-        device=device,
-    )
-    print("\n=== Attention Breakdown (on-path ms/call) ===")
-    print(f"reference step_total_ms={breakdown['reference_step_total_ms']:.4f}")
-    print(f"triton step_total_ms={breakdown['triton_step_total_ms']:.4f}")
-    print(
-        "  reference: sdpa_fwd_ms_per_step={rf:.4f} sdpa_total_ms_per_step={rst:.4f} non_sdpa_ms_per_step={rn:.4f}".format(
-            rf=breakdown["reference_sdpa_fwd_ms_per_step"],
-            rst=breakdown["reference_sdpa_total_ms_per_step"],
-            rn=breakdown["reference_non_sdpa_ms_per_step"],
+    breakdown_keys = [
+        "reference_step_total_ms",
+        "triton_step_total_ms",
+        "profile_calls",
+        "bwd_total_ms",
+        "delta_path_ms",
+        "dq_ms",
+        "dk_dv_ms",
+        "shared_ms",
+        "reference_sdpa_fwd_ms_per_step",
+        "triton_sdpa_fwd_ms_per_step",
+        "reference_sdpa_total_ms_per_step",
+        "triton_sdpa_total_ms_per_step",
+        "reference_non_sdpa_ms_per_step",
+        "triton_non_sdpa_ms_per_step",
+        "reference_embed_norm_ffn_ms_per_step",
+        "triton_embed_norm_ffn_ms_per_step",
+        "reference_qkv_reshape_ms_per_step",
+        "triton_qkv_reshape_ms_per_step",
+        "reference_optimizer_ms_per_step",
+        "triton_optimizer_ms_per_step",
+        "delta_vs_reference_ms",
+    ]
+    breakdown = {k: float("nan") for k in breakdown_keys}
+    if args.breakdown_steps > 0:
+        breakdown = _run_attention_breakdown_onpath(
+            minimal=minimal,
+            seed=args.seed + 10_000,
+            d_model=args.d_model,
+            batch_size=args.batch_size,
+            n_heads=args.n_heads,
+            d_ff=args.d_ff,
+            n_layers=args.n_layers,
+            vocab_size=args.vocab_size,
+            num_classes=args.num_classes,
+            seq_len=args.seq_len,
+            lr=args.lr,
+            warmup=args.breakdown_warmup,
+            steps=args.breakdown_steps,
+            symmetric_layout=args.benchmark_symmetric_layout,
+            cuda_graph=False,
+            device=device,
         )
-    )
-    print(
-        "  triton:    sdpa_fwd_ms_per_step={tf:.4f} sdpa_bwd_ms_per_step={tb:.4f} "
-        "sdpa_total_ms_per_step={tst:.4f} non_sdpa_ms_per_step={tn:.4f}".format(
-            tf=breakdown["triton_sdpa_fwd_ms_per_step"],
-            tb=breakdown["bwd_total_ms"],
-            tst=breakdown["triton_sdpa_total_ms_per_step"],
-            tn=breakdown["triton_non_sdpa_ms_per_step"],
+        print("\n=== Attention Breakdown (on-path ms/call) ===")
+        print(f"reference step_total_ms={breakdown['reference_step_total_ms']:.4f}")
+        print(f"triton step_total_ms={breakdown['triton_step_total_ms']:.4f}")
+        print(
+            "  reference: sdpa_fwd_ms_per_step={rf:.4f} sdpa_total_ms_per_step={rst:.4f} non_sdpa_ms_per_step={rn:.4f}".format(
+                rf=breakdown["reference_sdpa_fwd_ms_per_step"],
+                rst=breakdown["reference_sdpa_total_ms_per_step"],
+                rn=breakdown["reference_non_sdpa_ms_per_step"],
+            )
         )
-    )
-    print(
-        "  triton_bwd_split: delta_ms={dlt:.4f} dq_ms={dq:.4f} dk_dv_ms={dkdv:.4f} shared_ms={sh:.4f}".format(
-            dlt=breakdown["delta_path_ms"],
-            dq=breakdown["dq_ms"],
-            dkdv=breakdown["dk_dv_ms"],
-            sh=breakdown["shared_ms"],
+        print(
+            "  triton:    sdpa_fwd_ms_per_step={tf:.4f} sdpa_bwd_ms_per_step={tb:.4f} "
+            "sdpa_total_ms_per_step={tst:.4f} non_sdpa_ms_per_step={tn:.4f}".format(
+                tf=breakdown["triton_sdpa_fwd_ms_per_step"],
+                tb=breakdown["bwd_total_ms"],
+                tst=breakdown["triton_sdpa_total_ms_per_step"],
+                tn=breakdown["triton_non_sdpa_ms_per_step"],
+            )
         )
-    )
-    print(
-        "  model_buckets(ms/step): "
-        "embed_norm_ffn ref={ref_enf:.4f} tri={tri_enf:.4f}; "
-        "qkv_reshape ref={ref_qkv:.4f} tri={tri_qkv:.4f}; "
-        "optimizer ref={ref_opt:.4f} tri={tri_opt:.4f}".format(
-            ref_enf=breakdown["reference_embed_norm_ffn_ms_per_step"],
-            tri_enf=breakdown["triton_embed_norm_ffn_ms_per_step"],
-            ref_qkv=breakdown["reference_qkv_reshape_ms_per_step"],
-            tri_qkv=breakdown["triton_qkv_reshape_ms_per_step"],
-            ref_opt=breakdown["reference_optimizer_ms_per_step"],
-            tri_opt=breakdown["triton_optimizer_ms_per_step"],
+        print(
+            "  triton_bwd_split: delta_ms={dlt:.4f} dq_ms={dq:.4f} dk_dv_ms={dkdv:.4f} shared_ms={sh:.4f}".format(
+                dlt=breakdown["delta_path_ms"],
+                dq=breakdown["dq_ms"],
+                dkdv=breakdown["dk_dv_ms"],
+                sh=breakdown["shared_ms"],
+            )
         )
-    )
-    print(f"  bwd_total_ms={breakdown['bwd_total_ms']:.4f} profile_calls={breakdown['profile_calls']:.0f}")
-    print(f"delta_vs_reference_ms={breakdown['delta_vs_reference_ms']:.4f}")
+        print(
+            "  model_buckets(ms/step): "
+            "embed_norm_ffn ref={ref_enf:.4f} tri={tri_enf:.4f}; "
+            "qkv_reshape ref={ref_qkv:.4f} tri={tri_qkv:.4f}; "
+            "optimizer ref={ref_opt:.4f} tri={tri_opt:.4f}".format(
+                ref_enf=breakdown["reference_embed_norm_ffn_ms_per_step"],
+                tri_enf=breakdown["triton_embed_norm_ffn_ms_per_step"],
+                ref_qkv=breakdown["reference_qkv_reshape_ms_per_step"],
+                tri_qkv=breakdown["triton_qkv_reshape_ms_per_step"],
+                ref_opt=breakdown["reference_optimizer_ms_per_step"],
+                tri_opt=breakdown["triton_optimizer_ms_per_step"],
+            )
+        )
+        print(f"  bwd_total_ms={breakdown['bwd_total_ms']:.4f} profile_calls={breakdown['profile_calls']:.0f}")
+        print(f"delta_vs_reference_ms={breakdown['delta_vs_reference_ms']:.4f}")
+    else:
+        print("\n=== Attention Breakdown ===")
+        print("skipped (--breakdown-steps <= 0)")
 
     if args.csv_out:
         out_path = Path(args.csv_out)
@@ -432,7 +461,10 @@ def main() -> None:
                 writer.writerow(enriched)
         print(f"\nwrote {out_path}")
 
-    if breakdown["triton_non_sdpa_ms_per_step"] > breakdown["triton_sdpa_total_ms_per_step"]:
+    if (
+        args.breakdown_steps > 0
+        and breakdown["triton_non_sdpa_ms_per_step"] > breakdown["triton_sdpa_total_ms_per_step"]
+    ):
         print(
             "\n[next ROI] non-SDPA step time is still dominant; prioritize "
             "buffer reuse/preallocation in autograd path, then CUDA Graph capture."
