@@ -12,12 +12,21 @@ Constraints (v0):
 - Contiguous inputs
 """
 
+import os
 import torch
 import triton
 import triton.language as tl
 
 
 _ALLOWED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
+_JVP_HVP_ENV = "THERIA_TRITON_JVP_HVP"
+
+
+def _require_jvp_hvp_enabled() -> None:
+    if os.getenv(_JVP_HVP_ENV, "0") != "1":
+        raise RuntimeError(
+            f"Triton JVP/HVP is opt-in. Set {_JVP_HVP_ENV}=1 to enable."
+        )
 
 
 def _assert_backward_contract(q, k, v, dout, m, l, require_v: bool = True):
@@ -480,6 +489,7 @@ def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
     Returns:
         dO with shape (B,H,T,D) in q.dtype
     """
+    _require_jvp_hvp_enabled()
     _assert_jvp_contract(q, k, v, dq, dk, dv, m, l)
     B, H, T, D = q.shape
 
@@ -501,6 +511,65 @@ def sdpa_jvp(q, k, v, dq, dk, dv, m, l, scale):
 
     dO = torch.matmul(dP, vf) + torch.matmul(P, dvf)
     return dO.to(q.dtype)
+
+
+def sdpa_hvp(q, k, v, vq, vk, vv, m, l, scale):
+    """
+    Explicit HVP for the frozen-stats SDPA operator using saved (m, l).
+
+    This matches the same contract as sdpa_jvp: P is reconstructed from saved
+    stats and the softmax Jacobian/Hessian are evaluated at that base point.
+    It is intended for small-shape correctness checks (CPU oracle), not speed.
+
+    Args:
+        q,k,v: (B,H,T,D) / (B,H,M,D)
+        vq,vk,vv: direction vectors (same shapes as q,k,v)
+        m,l: (B,H,T) forward row-wise max and sumexp
+        scale: 1/sqrt(D)
+    Returns:
+        (hvp_q, hvp_k, hvp_v) with the same shapes as q/k/v.
+    """
+    _require_jvp_hvp_enabled()
+    # Allow CPU for oracle tests; keep compute in fp32.
+    qf = q.float()
+    kf = k.float()
+    vf = v.float()
+    vqf = vq.float()
+    vkf = vk.float()
+    vvf = vv.float()
+
+    scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale
+    P = torch.exp(scores - m.unsqueeze(-1)) / l.unsqueeze(-1)
+
+    def softmax_jvp(delta_scores: torch.Tensor) -> torch.Tensor:
+        inner = (delta_scores * P).sum(dim=-1, keepdim=True)
+        return P * (delta_scores - inner)
+
+    scores_dir = (
+        torch.matmul(vqf, kf.transpose(-2, -1))
+        + torch.matmul(qf, vkf.transpose(-2, -1))
+    ) * scale
+    probs_dir = softmax_jvp(scores_dir)
+
+    grad_probs = vf.sum(dim=-1).unsqueeze(-2).expand_as(P)
+    grad_probs_dir = vvf.sum(dim=-1).unsqueeze(-2).expand_as(P)
+
+    inner = (grad_probs * P).sum(dim=-1, keepdim=True)
+    inner_dir = (grad_probs_dir * P + grad_probs * probs_dir).sum(dim=-1, keepdim=True)
+
+    grad_scores = P * (grad_probs - inner)
+    grad_scores_dir = probs_dir * (grad_probs - inner) + P * (grad_probs_dir - inner_dir)
+
+    hvp_q = scale * (
+        torch.matmul(grad_scores_dir, kf) + torch.matmul(grad_scores, vkf)
+    )
+    hvp_k = scale * (
+        torch.matmul(grad_scores_dir.transpose(-2, -1), qf)
+        + torch.matmul(grad_scores.transpose(-2, -1), vqf)
+    )
+    hvp_v = probs_dir.sum(dim=-2).unsqueeze(-1).expand_as(vf)
+
+    return hvp_q.to(q.dtype), hvp_k.to(k.dtype), hvp_v.to(v.dtype)
 
 @triton.jit
 def _sdpa_bwd_dq_kernel(
@@ -701,4 +770,5 @@ __all__ = [
     "sdpa_bwd_dk",
     "sdpa_bwd_dv",
     "sdpa_jvp",
+    "sdpa_hvp",
 ]

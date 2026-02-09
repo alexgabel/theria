@@ -6,11 +6,34 @@ Backward is implemented in Python using standard matmul formulas to preserve
 autograd correctness while keeping the kernel minimal.
 """
 
+from __future__ import annotations
+
+import os
 import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
 from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa_bwd_dk
+
+_TRITON_META_BWD_COUNTERS = {
+    "n_fast_bwd": 0,
+    "n_meta_bwd": 0,
+}
+
+
+def reset_triton_meta_bwd_counters() -> None:
+    _TRITON_META_BWD_COUNTERS["n_fast_bwd"] = 0
+    _TRITON_META_BWD_COUNTERS["n_meta_bwd"] = 0
+
+
+def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, int]:
+    out = {
+        "n_fast_bwd": int(_TRITON_META_BWD_COUNTERS["n_fast_bwd"]),
+        "n_meta_bwd": int(_TRITON_META_BWD_COUNTERS["n_meta_bwd"]),
+    }
+    if reset:
+        reset_triton_meta_bwd_counters()
+    return out
 
 
 @triton.autotune(
@@ -389,6 +412,118 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
 
 def triton_sdpa_fused_autograd(q, k, v):
     return TritonFusedSDPAFunction.apply(q, k, v)
+
+
+class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v):
+        """
+        Meta-safe hybrid path:
+        - Forward: Triton fused SDPA.
+        - Backward:
+          - fast Triton backward when higher-order graph construction is not needed
+          - autograd-recompute backward when create_graph=True so gradgrad through
+            attention uses full softmax curvature.
+        """
+        out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.save_for_backward(q, k, v, m, l)
+        ctx.scale = 1.0 / (q.shape[-1] ** 0.5)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v, m, l = ctx.saved_tensors
+        scale = ctx.scale
+        force_autograd = os.getenv("THERIA_TRITON_META_FORCE_AUTOGRAD_BWD", "0") == "1"
+        # Explicit trigger: use meta-safe path only when the backward itself is
+        # being tracked (create_graph=True) or when force-enabled by env flag.
+        use_autograd_recompute = force_autograd or bool(getattr(grad_out, "requires_grad", False))
+        if not use_autograd_recompute:
+            _TRITON_META_BWD_COUNTERS["n_fast_bwd"] += 1
+            dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale)
+            dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale)
+            dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+            return dq, dk, dv
+
+        _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+        # Keep graph-connected tensors in FULL/create_graph paths so returned
+        # grads preserve second-order dependence on original inputs.
+        q_ = q if q.requires_grad else q.detach().requires_grad_(True)
+        k_ = k if k.requires_grad else k.detach().requires_grad_(True)
+        v_ = v if v.requires_grad else v.detach().requires_grad_(True)
+
+        with torch.enable_grad():
+            scores = torch.matmul(q_, k_.transpose(-2, -1)) * scale
+            probs = torch.softmax(scores, dim=-1)
+            out = torch.matmul(probs, v_)
+
+        grad_q, grad_k, grad_v = torch.autograd.grad(
+            outputs=out,
+            inputs=(q_, k_, v_),
+            grad_outputs=grad_out,
+            # FULL-mode higher-order unrolls can revisit this subgraph; keep it.
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=False,
+        )
+        return grad_q, grad_k, grad_v
+
+
+def triton_sdpa_fused_autograd_meta(q, k, v):
+    """
+    Triton forward + hybrid backward:
+      fast first-order path, autograd-safe path under create_graph=True.
+    """
+    return TritonFusedSDPAFunctionMeta.apply(q, k, v)
+
+
+class TritonFusedSDPAFunctionFullAutograd(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v):
+        """
+        Forward: Triton fused SDPA.
+        Backward: recompute in PyTorch with create_graph=True to allow double backward.
+        This yields full softmax curvature but is not performance-optimized.
+        """
+        assert q.is_cuda and k.is_cuda and v.is_cuda, "TritonFusedSDPAFunctionFullAutograd requires CUDA tensors"
+        out = triton_sdpa_fused(q, k, v, return_stats=False)
+        ctx.save_for_backward(q, k, v)
+        ctx.scale = 1.0 / (q.shape[-1] ** 0.5)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v = ctx.saved_tensors
+        scale = ctx.scale
+        _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+
+        # Preserve graph connectivity for full-curvature double-backward.
+        q_ = q if q.requires_grad else q.detach().requires_grad_(True)
+        k_ = k if k.requires_grad else k.detach().requires_grad_(True)
+        v_ = v if v.requires_grad else v.detach().requires_grad_(True)
+
+        with torch.enable_grad():
+            scores = torch.matmul(q_, k_.transpose(-2, -1)) * scale
+            probs = torch.softmax(scores, dim=-1)
+            out = torch.matmul(probs, v_)
+
+        grad_q, grad_k, grad_v = torch.autograd.grad(
+            outputs=out,
+            inputs=(q_, k_, v_),
+            grad_outputs=grad_out,
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=False,
+        )
+        return grad_q, grad_k, grad_v
+
+
+def triton_sdpa_fused_autograd_full(q, k, v):
+    """
+    Triton forward + autograd-in-backward (full curvature).
+    Intended for correctness experiments, not speed.
+    """
+    return TritonFusedSDPAFunctionFullAutograd.apply(q, k, v)
 
 
 @triton.autotune(

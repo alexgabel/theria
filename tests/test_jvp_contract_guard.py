@@ -1,5 +1,6 @@
 import pytest
 import torch
+import os
 
 from theria.attention.triton_sdpa_backward import sdpa_jvp
 from theria.attention.triton_qk import triton_sdpa_fused
@@ -7,6 +8,7 @@ from theria.attention.triton_qk import triton_sdpa_fused
 
 @pytest.mark.gpu
 def test_jvp_frozen_stats_differs_from_recomputed():
+    os.environ["THERIA_TRITON_JVP_HVP"] = "1"
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 
@@ -41,4 +43,3 @@ def test_jvp_frozen_stats_differs_from_recomputed():
 
     # They should not be equal (contract explicitly freezes stats)
     assert not torch.allclose(jvp_frozen, jvp_recompute, rtol=1e-3, atol=1e-3)
-

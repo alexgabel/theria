@@ -15,6 +15,7 @@ from .triton_sdpa_backward import (
     sdpa_bwd_dk,
     sdpa_bwd_dv,
     sdpa_jvp,
+    sdpa_hvp,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "sdpa_bwd_dk",
     "sdpa_bwd_dv",
     "sdpa_jvp",
+    "sdpa_hvp",
 ]

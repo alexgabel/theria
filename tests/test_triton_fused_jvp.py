@@ -1,5 +1,6 @@
 import pytest
 import torch
+import os
 
 from theria.attention.triton_qk import triton_sdpa_fused
 from theria.attention.triton_sdpa_backward import sdpa_jvp
@@ -19,6 +20,7 @@ def _l2_normalize(t):
     ],
 )
 def test_fused_jvp_matches_finite_difference(shape):
+    os.environ["THERIA_TRITON_JVP_HVP"] = "1"
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 

@@ -27,12 +27,16 @@ from experiments.phase10.scripts.run_maml_backend_compare import (
     set_attention_backend,
 )
 from theria.attention.custom import sdpa_custom
-from theria.maml.loops import meta_loss_on_tasks
+from theria.attention.triton_qk import (
+    get_triton_meta_bwd_counters,
+    reset_triton_meta_bwd_counters,
+)
+from theria.maml.loops import meta_loss_on_tasks, meta_loss_on_tasks_full_frozen
 from theria.tasks.synthetic_seqcls import task_sampler
 from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
 
 
-Mode = Literal["FULL", "FO", "FO_STRICT"]
+Mode = Literal["FULL", "FO", "FO_STRICT", "FULL_FROZEN"]
 
 
 def _mean_last(values: list[float], n: int) -> float:
@@ -68,11 +72,22 @@ def run_behavior(
 ) -> dict[str, float | int | str]:
     if num_signal_positions >= seq_len:
         raise ValueError("num_signal_positions must be < seq_len (position 0 is reserved).")
+    reset_triton_meta_bwd_counters()
     torch.manual_seed(seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
     model = Phase10TinyAttentionModel().to(device)
-    set_attention_backend(model, attention_backend)
+    backend_for_run = attention_backend
+    if mode == "FULL_FROZEN":
+        if attention_backend == "triton_fused":
+            backend_for_run = "triton_frozen_stats"
+            if device.type != "cuda":
+                raise ValueError("FULL_FROZEN with triton_fused requires CUDA device")
+        elif attention_backend == "reference":
+            backend_for_run = "reference_frozen_stats"
+        else:
+            raise ValueError("FULL_FROZEN only supports reference or triton_fused backends")
+    set_attention_backend(model, backend_for_run)
     optimizer = torch.optim.Adam(model.parameters(), lr=outer_lr)
     dtype_name = str(next(model.parameters()).dtype).replace("torch.", "")
     if autocast_enabled and device.type == "cuda":
@@ -82,7 +97,7 @@ def run_behavior(
     else:
         compute_dtype = "fp32"
 
-    fo = mode != "FULL"
+    fo = mode not in {"FULL", "FULL_FROZEN"}
     fo_strict = mode == "FO_STRICT"
     cast_dtype = torch.float16 if device.type == "cuda" else torch.bfloat16
     if grad_eps is None:
@@ -103,6 +118,11 @@ def run_behavior(
         "reference": "reference",
         "custom": "custom",
         "triton_fused": "triton_full_fused",
+        "triton_fused_meta": "triton_full_fused",
+        "triton_fused_meta_strict": "reference",
+        "triton_full_autograd": "triton_full_fused",
+        "triton_frozen_stats": "triton_full_fused",
+        "reference_frozen_stats": "reference",
     }
     probe_backend = backend_map[attention_backend]
 
@@ -132,16 +152,27 @@ def run_behavior(
             enabled=autocast_enabled,
             dtype=cast_dtype,
         ):
-            outer_loss, metrics = meta_loss_on_tasks(
-                model=model,
-                tasks=tasks,
-                inner_lr=inner_lr,
-                inner_steps=inner_steps,
-                fo=fo,
-                fo_strict=fo_strict,
-                return_metrics=True,
-            )
-        outer_loss.backward()
+            if mode == "FULL_FROZEN":
+                outer_loss, metrics, meta_grads = meta_loss_on_tasks_full_frozen(
+                    model=model,
+                    tasks=tasks,
+                    inner_lr=inner_lr,
+                    inner_steps=inner_steps,
+                    return_metrics=True,
+                )
+                for (_, p), g in zip(model.named_parameters(), meta_grads):
+                    p.grad = g
+            else:
+                outer_loss, metrics = meta_loss_on_tasks(
+                    model=model,
+                    tasks=tasks,
+                    inner_lr=inner_lr,
+                    inner_steps=inner_steps,
+                    fo=fo,
+                    fo_strict=fo_strict,
+                    return_metrics=True,
+                )
+                outer_loss.backward()
 
         qg = model.q_proj.weight.grad
         kg = model.k_proj.weight.grad
@@ -171,6 +202,8 @@ def run_behavior(
         peak_cuda_mem_bytes = int(torch.cuda.max_memory_allocated(device))
     wall_time_total_s = time.perf_counter() - t0
     mean_outer_step_time_s = wall_time_total_s / max(outer_steps, 1)
+    # Capture counters for the actual training loop only; reset before optional probes.
+    meta_bwd_counts = get_triton_meta_bwd_counters(reset=True)
 
     # Sparse rel_diff probe (once per run): FULL vs FO on one fresh task
     rel_diff_probe_val = float("nan")
@@ -214,6 +247,8 @@ def run_behavior(
             v_fo = _vec(grads_fo)
             if v_full is not None and v_fo is not None and v_full.norm().item() > eps_probe:
                 rel_diff_probe_val = (v_full - v_fo).norm().item() / (v_full.norm().item() + eps_probe)
+        # Keep counters scoped to training path; probe calls are diagnostic only.
+        reset_triton_meta_bwd_counters()
 
     return {
         "backend": attention_backend,
@@ -241,13 +276,29 @@ def run_behavior(
         "wall_time_total_s": wall_time_total_s,
         "mean_outer_step_time_s": mean_outer_step_time_s,
         "peak_cuda_mem_bytes": peak_cuda_mem_bytes,
+        "n_fast_bwd": int(meta_bwd_counts["n_fast_bwd"]),
+        "n_meta_bwd": int(meta_bwd_counts["n_meta_bwd"]),
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", type=str, required=True, choices=["reference", "custom", "triton_fused"])
-    parser.add_argument("--mode", type=str, required=True, choices=["FULL", "FO", "FO_STRICT"])
+    parser.add_argument(
+        "--backend",
+        type=str,
+        required=True,
+        choices=[
+            "reference",
+            "custom",
+            "triton_fused",
+            "triton_fused_meta",
+            "triton_fused_meta_strict",
+            "triton_full_autograd",
+            "triton_frozen_stats",
+            "reference_frozen_stats",
+        ],
+    )
+    parser.add_argument("--mode", type=str, required=True, choices=["FULL", "FO", "FO_STRICT", "FULL_FROZEN"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--outer-steps", type=int, default=500)
     parser.add_argument("--meta-batch-size", type=int, default=16)
@@ -304,6 +355,8 @@ def main() -> None:
             "mean_outer_step_time_s": float("nan"),
             "peak_cuda_mem_bytes": 0,
             "convergence_delta": float("nan"),
+            "n_fast_bwd": 0,
+            "n_meta_bwd": 0,
         }
         status, error = "HARD_FAIL_OTHER", repr(e)
 
@@ -318,6 +371,8 @@ def main() -> None:
         f"convergence_delta={row['convergence_delta']} "
         f"wall_time_total_s={row['wall_time_total_s']} "
         f"mean_outer_step_time_s={row['mean_outer_step_time_s']} "
+        f"n_fast_bwd={row.get('n_fast_bwd',0)} "
+        f"n_meta_bwd={row.get('n_meta_bwd',0)} "
         f"status={status}"
     )
 
@@ -353,6 +408,8 @@ def main() -> None:
                     "wall_time_total_s",
                     "mean_outer_step_time_s",
                     "peak_cuda_mem_bytes",
+                    "n_fast_bwd",
+                    "n_meta_bwd",
                     "status",
                     "error",
                     "convergence_delta",

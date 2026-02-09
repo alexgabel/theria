@@ -9,7 +9,15 @@ import torch
 
 from .reference import reference_attention
 from theria.autograd.sdpa_custom_function import SDPACustom
-from theria.attention.triton_qk import triton_qk, triton_qk_fast, triton_qk_softmax, triton_sdpa_fused_autograd
+from theria.attention.triton_qk import (
+    triton_qk,
+    triton_qk_fast,
+    triton_qk_softmax,
+    triton_sdpa_fused,
+    triton_sdpa_fused_autograd,
+    triton_sdpa_fused_autograd_meta,
+    triton_sdpa_fused_autograd_full,
+)
 
 
 def sdpa_custom(q, k, v, *, backend: str = "reference"):
@@ -25,6 +33,17 @@ def sdpa_custom(q, k, v, *, backend: str = "reference"):
     """
     if backend == "reference":
         return reference_attention(q, k, v)
+    if backend == "reference_frozen_stats":
+        # Frozen-stats contract: detach row-wise max/sumexp stats.
+        scale = 1.0 / (q.shape[-1] ** 0.5)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+        with torch.no_grad():
+            m = scores.max(dim=-1).values
+            l = torch.exp(scores - m.unsqueeze(-1)).sum(dim=-1)
+        probs = torch.exp(scores - m.unsqueeze(-1)) / l.unsqueeze(-1)
+        v_cast = v.to(probs.dtype)
+        out = torch.matmul(probs, v_cast)
+        return out.to(q.dtype)
     if backend == "custom":
         return SDPACustom.apply(q, k, v)
     if backend in ("triton_qk", "triton_ref", "triton"):
@@ -53,6 +72,35 @@ def sdpa_custom(q, k, v, *, backend: str = "reference"):
         assert q.shape[-1] <= 64, "triton_full_fused v0 supports D <= 64 only"
         # Phase 8 forward-only fused kernel; keep output stable through Phase 9.
         out = triton_sdpa_fused_autograd(q, k, v)
+        return out.to(q.dtype)
+    if backend == "triton_fused_meta":
+        assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous(), "triton_fused_meta requires contiguous inputs"
+        assert q.shape[-1] == v.shape[-1], "triton_fused_meta requires Dv == D"
+        assert q.shape[-1] <= 64, "triton_fused_meta v0 supports D <= 64 only"
+        out = triton_sdpa_fused_autograd_meta(q, k, v)
+        return out.to(q.dtype)
+    if backend == "triton_fused_meta_strict":
+        # Strict contract-validation mode: forward/backward both use the same
+        # unfused softmax graph, avoiding fused-forward vs recompute-backward
+        # mismatch in higher-order checks.
+        return reference_attention(q, k, v).to(q.dtype)
+    if backend == "triton_full_autograd":
+        assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous(), "triton_full_autograd requires contiguous inputs"
+        assert q.shape[-1] == v.shape[-1], "triton_full_autograd requires Dv == D"
+        assert q.shape[-1] <= 64, "triton_full_autograd v0 supports D <= 64 only"
+        out = triton_sdpa_fused_autograd_full(q, k, v)
+        return out.to(q.dtype)
+    if backend == "triton_frozen_stats":
+        assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous(), "triton_frozen_stats requires contiguous inputs"
+        assert q.shape[-1] == v.shape[-1], "triton_frozen_stats requires Dv == D"
+        assert q.shape[-1] <= 64, "triton_frozen_stats v0 supports D <= 64 only"
+        scale = 1.0 / (q.shape[-1] ** 0.5)
+        with torch.no_grad():
+            _, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+        probs = torch.exp(scores - m.unsqueeze(-1)) / l.unsqueeze(-1)
+        v_cast = v.to(probs.dtype)
+        out = torch.matmul(probs, v_cast)
         return out.to(q.dtype)
     raise ValueError(f"Unsupported sdpa_custom backend: {backend}")
 
