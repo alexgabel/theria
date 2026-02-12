@@ -48,6 +48,7 @@ extra_lr_args=()
 
 extra_mode_args=()
 [[ -n "${META_EVERY_N_OUTER:-}" ]] && extra_mode_args+=(--meta-every-n-outer "${META_EVERY_N_OUTER}")
+[[ -n "${META_LAST_N_INNER:-}" ]] && extra_mode_args+=(--meta-last-n-inner "${META_LAST_N_INNER}")
 if [[ "${PROFILE_META_BWD:-0}" == "1" ]]; then
   extra_mode_args+=(--profile-meta-bwd)
 fi

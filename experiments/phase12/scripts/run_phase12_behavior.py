@@ -69,6 +69,7 @@ def run_behavior(
     device: torch.device,
     autocast_enabled: bool = False,
     meta_every_n_outer: int = 2,
+    meta_last_n_inner: int = 0,
     profile_meta_bwd: bool = False,
     grad_eps: float | None = None,
     rel_diff_probe: bool = True,
@@ -77,6 +78,10 @@ def run_behavior(
         raise ValueError("num_signal_positions must be < seq_len (position 0 is reserved).")
     if mode == "FULL_HYBRID" and meta_every_n_outer < 1:
         raise ValueError("meta_every_n_outer must be >= 1 for FULL_HYBRID")
+    if meta_last_n_inner < 0:
+        raise ValueError("meta_last_n_inner must be >= 0")
+    if meta_last_n_inner > inner_steps:
+        raise ValueError("meta_last_n_inner must be <= inner_steps")
     reset_triton_meta_bwd_counters()
     prev_meta_profile_env = os.environ.get("THERIA_TRITON_META_PROFILE")
     if profile_meta_bwd:
@@ -183,6 +188,7 @@ def run_behavior(
                         n_hybrid_meta_steps += 1
                     else:
                         n_hybrid_fo_steps += 1
+                meta_last_n_inner_step = meta_last_n_inner if not fo_step else 0
                 outer_loss, metrics = meta_loss_on_tasks(
                     model=model,
                     tasks=tasks,
@@ -190,6 +196,7 @@ def run_behavior(
                     inner_steps=inner_steps,
                     fo=fo_step,
                     fo_strict=fo_strict_step,
+                    meta_last_n_inner=meta_last_n_inner_step,
                     return_metrics=True,
                 )
                 outer_loss.backward()
@@ -247,6 +254,7 @@ def run_behavior(
                 inner_steps=inner_steps,
                 fo=False,
                 fo_strict=False,
+                meta_last_n_inner=meta_last_n_inner,
                 return_metrics=False,
             )
             outer_fo = meta_loss_on_tasks(
@@ -256,6 +264,7 @@ def run_behavior(
                 inner_steps=inner_steps,
                 fo=True,
                 fo_strict=False,
+                meta_last_n_inner=0,
                 return_metrics=False,
             )
             eps_probe = 1e-9
@@ -285,6 +294,7 @@ def run_behavior(
         "compute_dtype": compute_dtype,
         "autocast": int(bool(autocast_enabled)),
         "meta_every_n_outer": int(meta_every_n_outer if mode == "FULL_HYBRID" else 0),
+        "meta_last_n_inner": int(meta_last_n_inner if mode in {"FULL", "FULL_HYBRID"} else 0),
         "n_hybrid_meta_steps": int(n_hybrid_meta_steps),
         "n_hybrid_fo_steps": int(n_hybrid_fo_steps),
         "final_loss": final_loss,
@@ -356,6 +366,15 @@ def main() -> None:
         default=2,
         help="FULL_HYBRID only: run FULL step every N outer steps; FO otherwise.",
     )
+    parser.add_argument(
+        "--meta-last-n-inner",
+        type=int,
+        default=0,
+        help=(
+            "For FULL/FULL_HYBRID only: keep full second-order graph for the last N "
+            "inner updates (0 disables truncation)."
+        ),
+    )
     parser.add_argument("--seq-len", type=int, default=32)
     parser.add_argument("--num-signal-positions", type=int, default=4)
     parser.add_argument("--device", type=str, default="cpu")
@@ -379,6 +398,7 @@ def main() -> None:
             inner_lr=args.inner_lr,
             outer_lr=args.outer_lr,
             meta_every_n_outer=args.meta_every_n_outer,
+            meta_last_n_inner=args.meta_last_n_inner,
             profile_meta_bwd=args.profile_meta_bwd,
             seq_len=args.seq_len,
             num_signal_positions=args.num_signal_positions,
@@ -402,6 +422,9 @@ def main() -> None:
             "compute_dtype": "NA",
             "autocast": int(bool(args.autocast)),
             "meta_every_n_outer": int(args.meta_every_n_outer if args.mode == "FULL_HYBRID" else 0),
+            "meta_last_n_inner": int(
+                args.meta_last_n_inner if args.mode in {"FULL", "FULL_HYBRID"} else 0
+            ),
             "n_hybrid_meta_steps": 0,
             "n_hybrid_fo_steps": 0,
             "final_loss": float("nan"),
@@ -438,6 +461,7 @@ def main() -> None:
         f"convergence_delta={row['convergence_delta']} "
         f"wall_time_total_s={row['wall_time_total_s']} "
         f"mean_outer_step_time_s={row['mean_outer_step_time_s']} "
+        f"meta_last_n_inner={row.get('meta_last_n_inner',0)} "
         f"n_fast_bwd={row.get('n_fast_bwd',0)} "
         f"n_meta_bwd={row.get('n_meta_bwd',0)} "
         f"meta_bwd_time_s={row.get('meta_bwd_time_s',0.0)} "
@@ -467,6 +491,7 @@ def main() -> None:
                     "compute_dtype",
                     "autocast",
                     "meta_every_n_outer",
+                    "meta_last_n_inner",
                     "n_hybrid_meta_steps",
                     "n_hybrid_fo_steps",
                     "final_loss",

@@ -138,6 +138,15 @@ def main() -> None:
         help="FULL_HYBRID only: run FULL step every N outer steps.",
     )
     parser.add_argument(
+        "--meta-last-n-inner",
+        type=int,
+        default=0,
+        help=(
+            "For FULL/FULL_HYBRID only: keep full second-order graph for the last N "
+            "inner updates (0 disables truncation)."
+        ),
+    )
+    parser.add_argument(
         "--profile-meta-bwd",
         action="store_true",
         help="Enable Triton meta backward timing counters during runs.",
@@ -184,6 +193,7 @@ def main() -> None:
         "compute_dtype",
         "autocast",
         "meta_every_n_outer",
+        "meta_last_n_inner",
         "n_hybrid_meta_steps",
         "n_hybrid_fo_steps",
         "final_loss",
@@ -243,6 +253,7 @@ def main() -> None:
                             inner_lr=pilot_inner_lr,
                             outer_lr=pilot_outer_lr,
                             meta_every_n_outer=args.meta_every_n_outer,
+                            meta_last_n_inner=args.meta_last_n_inner,
                             profile_meta_bwd=args.profile_meta_bwd,
                             seq_len=args.seq_len,
                             num_signal_positions=args.num_signal_positions,
@@ -292,6 +303,7 @@ def main() -> None:
                                 inner_lr=run_inner_lr,
                                 outer_lr=run_outer_lr,
                                 meta_every_n_outer=args.meta_every_n_outer,
+                                meta_last_n_inner=args.meta_last_n_inner,
                                 profile_meta_bwd=args.profile_meta_bwd,
                                 seq_len=args.seq_len,
                                 num_signal_positions=args.num_signal_positions,
@@ -316,6 +328,11 @@ def main() -> None:
                                 "autocast": int(bool(args.autocast)),
                                 "meta_every_n_outer": int(
                                     args.meta_every_n_outer if mode == "FULL_HYBRID" else 0
+                                ),
+                                "meta_last_n_inner": int(
+                                    args.meta_last_n_inner
+                                    if mode in {"FULL", "FULL_HYBRID"}
+                                    else 0
                                 ),
                                 "n_hybrid_meta_steps": 0,
                                 "n_hybrid_fo_steps": 0,
@@ -360,6 +377,11 @@ def main() -> None:
                             "inner_lr": run_inner_lr,
                             "meta_every_n_outer": (
                                 int(args.meta_every_n_outer) if mode == "FULL_HYBRID" else 0
+                            ),
+                            "meta_last_n_inner": (
+                                int(args.meta_last_n_inner)
+                                if mode in {"FULL", "FULL_HYBRID"}
+                                else 0
                             ),
                             "seq_len": args.seq_len,
                             "num_signal_positions": args.num_signal_positions,
@@ -406,6 +428,7 @@ def main() -> None:
                     "comparison_protocol",
                     "inner_lr_mean",
                     "outer_lr_mean",
+                    "meta_last_n_inner_mean",
                     "outer_steps_mean",
                     "final_acc_mean",
                     "final_acc_std",
@@ -487,6 +510,13 @@ def main() -> None:
                         str(items[0].get("comparison_protocol", "")),
                         _mean([float(x["inner_lr"]) for x in items if str(x.get("status")) == "OK"]),
                         _mean([float(x["outer_lr"]) for x in items if str(x.get("status")) == "OK"]),
+                        _mean(
+                            [
+                                float(x.get("meta_last_n_inner", 0))
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
                         _mean(outer_steps_vals),
                         _mean(accs),
                         _std(accs),

@@ -48,6 +48,7 @@ def inner_adapt(
     inner_lr: float = 0.1,
     inner_steps: int = 1,
     fo: bool = False,
+    meta_last_n_inner: int = 0,
 ) -> Params:
     """
     Full MAML inner loop:
@@ -57,14 +58,20 @@ def inner_adapt(
     """
     phi = OrderedDict((k, v) for k, v in params.items())
 
-    for _ in range(inner_steps):
+    for step_idx in range(inner_steps):
         logits_s = functional_call(model, (phi, buffers), (task.x_s,))
         loss_s = loss_fn(logits_s, task.y_s)
+
+        # Optional truncation: keep full second-order graph only for the last
+        # N inner updates (useful for hybrid/latency-constrained meta-runs).
+        use_create_graph = not fo
+        if use_create_graph and meta_last_n_inner > 0 and meta_last_n_inner < inner_steps:
+            use_create_graph = step_idx >= (inner_steps - meta_last_n_inner)
 
         grads = torch.autograd.grad(
             loss_s,
             tuple(phi.values()),
-            create_graph=not fo, # REQUIRED for meta-gradient
+            create_graph=use_create_graph, # REQUIRED for meta-gradient
             retain_graph=True,
             allow_unused=False,
         )
@@ -96,6 +103,7 @@ def meta_loss_on_tasks(
     inner_steps: int = 1,
     fo: bool = False,
     fo_strict: bool = False,
+    meta_last_n_inner: int = 0,
     return_metrics: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
     """
@@ -108,7 +116,16 @@ def meta_loss_on_tasks(
     losses = []
     accs = []
     for task in tasks:
-        phi = inner_adapt(model, params, buffers, task, inner_lr=inner_lr, inner_steps=inner_steps, fo=fo)
+        phi = inner_adapt(
+            model,
+            params,
+            buffers,
+            task,
+            inner_lr=inner_lr,
+            inner_steps=inner_steps,
+            fo=fo,
+            meta_last_n_inner=meta_last_n_inner,
+        )
         if fo_strict:
             phi = OrderedDict((k, v.detach().clone()) for k, v in phi.items())
         logits_q = functional_call(model, (phi, buffers), (task.x_q,))
