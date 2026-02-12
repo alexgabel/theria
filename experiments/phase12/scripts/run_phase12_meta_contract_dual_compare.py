@@ -29,6 +29,12 @@ def _run_check(
     device: str,
     csv_out: Path,
     summary_out: Path,
+    gate_csv_out: Path,
+    fail_on_gate: bool,
+    min_cosine_full_mean: float,
+    min_cosine_fo_mean: float,
+    max_rel_diff_abs_error: float,
+    require_trend_sign_match: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -51,7 +57,19 @@ def _run_check(
         str(csv_out),
         "--summary-out",
         str(summary_out),
+        "--gate-csv-out",
+        str(gate_csv_out),
+        "--min-cosine-full-mean",
+        str(min_cosine_full_mean),
+        "--min-cosine-fo-mean",
+        str(min_cosine_fo_mean),
+        "--max-rel-diff-abs-error",
+        str(max_rel_diff_abs_error),
     ]
+    if fail_on_gate:
+        cmd.append("--fail-on-gate")
+    if require_trend_sign_match:
+        cmd.append("--require-trend-sign-match")
     print(f"\n== Running {candidate_backend} ==")
     print(" ".join(cmd))
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
@@ -89,6 +107,11 @@ def main() -> None:
     parser.add_argument("--out-dir", type=str, default="experiments/phase12/runs")
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--delta-out", type=str, default=None)
+    parser.add_argument("--fail-on-gate", action="store_true")
+    parser.add_argument("--min-cosine-full-mean", type=float, default=0.999)
+    parser.add_argument("--min-cosine-fo-mean", type=float, default=0.999)
+    parser.add_argument("--max-rel-diff-abs-error", type=float, default=5e-4)
+    parser.add_argument("--require-trend-sign-match", action="store_true")
     args = parser.parse_args()
 
     if args.device != "cuda" and (
@@ -104,8 +127,10 @@ def main() -> None:
 
     meta_csv = out_dir / f"phase12_meta_contract_{tag}_{args.meta_backend}.csv"
     meta_summary = out_dir / f"phase12_meta_contract_{tag}_{args.meta_backend}_summary.csv"
+    meta_gate = out_dir / f"phase12_meta_contract_{tag}_{args.meta_backend}_gate.csv"
     strict_csv = out_dir / f"phase12_meta_contract_{tag}_{args.strict_backend}.csv"
     strict_summary = out_dir / f"phase12_meta_contract_{tag}_{args.strict_backend}_summary.csv"
+    strict_gate = out_dir / f"phase12_meta_contract_{tag}_{args.strict_backend}_gate.csv"
 
     _run_check(
         reference_backend=args.reference_backend,
@@ -117,6 +142,12 @@ def main() -> None:
         device=args.device,
         csv_out=meta_csv,
         summary_out=meta_summary,
+        gate_csv_out=meta_gate,
+        fail_on_gate=args.fail_on_gate,
+        min_cosine_full_mean=args.min_cosine_full_mean,
+        min_cosine_fo_mean=args.min_cosine_fo_mean,
+        max_rel_diff_abs_error=args.max_rel_diff_abs_error,
+        require_trend_sign_match=args.require_trend_sign_match,
     )
     _run_check(
         reference_backend=args.reference_backend,
@@ -128,6 +159,12 @@ def main() -> None:
         device=args.device,
         csv_out=strict_csv,
         summary_out=strict_summary,
+        gate_csv_out=strict_gate,
+        fail_on_gate=args.fail_on_gate,
+        min_cosine_full_mean=args.min_cosine_full_mean,
+        min_cosine_fo_mean=args.min_cosine_fo_mean,
+        max_rel_diff_abs_error=args.max_rel_diff_abs_error,
+        require_trend_sign_match=args.require_trend_sign_match,
     )
 
     meta_rows = _load_summary(meta_summary)
@@ -203,7 +240,10 @@ def main() -> None:
             f"{_fmt(abs_err_strict):>14}  {_fmt(improve):>7}"
         )
 
-    print(f"\nWrote:\n- {meta_csv}\n- {meta_summary}\n- {strict_csv}\n- {strict_summary}\n- {delta_out}")
+    print(
+        f"\nWrote:\n- {meta_csv}\n- {meta_summary}\n- {meta_gate}\n"
+        f"- {strict_csv}\n- {strict_summary}\n- {strict_gate}\n- {delta_out}"
+    )
 
 
 if __name__ == "__main__":

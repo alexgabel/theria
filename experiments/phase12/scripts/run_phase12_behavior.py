@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from pathlib import Path
 import sys
 import time
@@ -36,7 +37,7 @@ from theria.tasks.synthetic_seqcls import task_sampler
 from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
 
 
-Mode = Literal["FULL", "FO", "FO_STRICT", "FULL_FROZEN"]
+Mode = Literal["FULL", "FO", "FO_STRICT", "FULL_FROZEN", "FULL_HYBRID"]
 
 
 def _mean_last(values: list[float], n: int) -> float:
@@ -67,12 +68,19 @@ def run_behavior(
     num_signal_positions: int = 4,
     device: torch.device,
     autocast_enabled: bool = False,
+    meta_every_n_outer: int = 2,
+    profile_meta_bwd: bool = False,
     grad_eps: float | None = None,
     rel_diff_probe: bool = True,
 ) -> dict[str, float | int | str]:
     if num_signal_positions >= seq_len:
         raise ValueError("num_signal_positions must be < seq_len (position 0 is reserved).")
+    if mode == "FULL_HYBRID" and meta_every_n_outer < 1:
+        raise ValueError("meta_every_n_outer must be >= 1 for FULL_HYBRID")
     reset_triton_meta_bwd_counters()
+    prev_meta_profile_env = os.environ.get("THERIA_TRITON_META_PROFILE")
+    if profile_meta_bwd:
+        os.environ["THERIA_TRITON_META_PROFILE"] = "1"
     torch.manual_seed(seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
@@ -97,7 +105,7 @@ def run_behavior(
     else:
         compute_dtype = "fp32"
 
-    fo = mode not in {"FULL", "FULL_FROZEN"}
+    fo = mode not in {"FULL", "FULL_FROZEN", "FULL_HYBRID"}
     fo_strict = mode == "FO_STRICT"
     cast_dtype = torch.float16 if device.type == "cuda" else torch.bfloat16
     if grad_eps is None:
@@ -135,7 +143,9 @@ def run_behavior(
     )
     t0 = time.perf_counter()
 
-    for _ in range(outer_steps):
+    n_hybrid_meta_steps = 0
+    n_hybrid_fo_steps = 0
+    for step_idx in range(outer_steps):
         optimizer.zero_grad(set_to_none=True)
         tasks = [
             task_sampler(
@@ -163,13 +173,23 @@ def run_behavior(
                 for (_, p), g in zip(model.named_parameters(), meta_grads):
                     p.grad = g
             else:
+                fo_step = fo
+                fo_strict_step = fo_strict
+                if mode == "FULL_HYBRID":
+                    use_meta_step = (step_idx % meta_every_n_outer) == 0
+                    fo_step = not use_meta_step
+                    fo_strict_step = False
+                    if use_meta_step:
+                        n_hybrid_meta_steps += 1
+                    else:
+                        n_hybrid_fo_steps += 1
                 outer_loss, metrics = meta_loss_on_tasks(
                     model=model,
                     tasks=tasks,
                     inner_lr=inner_lr,
                     inner_steps=inner_steps,
-                    fo=fo,
-                    fo_strict=fo_strict,
+                    fo=fo_step,
+                    fo_strict=fo_strict_step,
                     return_metrics=True,
                 )
                 outer_loss.backward()
@@ -250,7 +270,7 @@ def run_behavior(
         # Keep counters scoped to training path; probe calls are diagnostic only.
         reset_triton_meta_bwd_counters()
 
-    return {
+    row = {
         "backend": attention_backend,
         "mode": mode,
         "seed": seed,
@@ -264,6 +284,9 @@ def run_behavior(
         "dtype": dtype_name,
         "compute_dtype": compute_dtype,
         "autocast": int(bool(autocast_enabled)),
+        "meta_every_n_outer": int(meta_every_n_outer if mode == "FULL_HYBRID" else 0),
+        "n_hybrid_meta_steps": int(n_hybrid_meta_steps),
+        "n_hybrid_fo_steps": int(n_hybrid_fo_steps),
         "final_loss": final_loss,
         "final_acc": final_acc,
         "attn_grad_norm_q": attn_grad_norm_q,
@@ -278,7 +301,24 @@ def run_behavior(
         "peak_cuda_mem_bytes": peak_cuda_mem_bytes,
         "n_fast_bwd": int(meta_bwd_counts["n_fast_bwd"]),
         "n_meta_bwd": int(meta_bwd_counts["n_meta_bwd"]),
+        "fast_bwd_time_s": float(meta_bwd_counts.get("fast_bwd_time_s", 0.0)),
+        "meta_bwd_time_s": float(meta_bwd_counts.get("meta_bwd_time_s", 0.0)),
+        "meta_recompute_time_s": float(meta_bwd_counts.get("meta_recompute_time_s", 0.0)),
+        "fast_bwd_time_per_outer_step_s": float(meta_bwd_counts.get("fast_bwd_time_s", 0.0))
+        / max(outer_steps, 1),
+        "meta_bwd_time_per_outer_step_s": float(meta_bwd_counts.get("meta_bwd_time_s", 0.0))
+        / max(outer_steps, 1),
+        "meta_recompute_time_per_outer_step_s": float(
+            meta_bwd_counts.get("meta_recompute_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
     }
+    if profile_meta_bwd:
+        if prev_meta_profile_env is None:
+            os.environ.pop("THERIA_TRITON_META_PROFILE", None)
+        else:
+            os.environ["THERIA_TRITON_META_PROFILE"] = prev_meta_profile_env
+    return row
 
 
 def main() -> None:
@@ -298,17 +338,33 @@ def main() -> None:
             "reference_frozen_stats",
         ],
     )
-    parser.add_argument("--mode", type=str, required=True, choices=["FULL", "FO", "FO_STRICT", "FULL_FROZEN"])
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["FULL", "FO", "FO_STRICT", "FULL_FROZEN", "FULL_HYBRID"],
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--outer-steps", type=int, default=500)
     parser.add_argument("--meta-batch-size", type=int, default=16)
     parser.add_argument("--inner-steps", type=int, default=1)
     parser.add_argument("--inner-lr", type=float, default=0.4)
     parser.add_argument("--outer-lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--meta-every-n-outer",
+        type=int,
+        default=2,
+        help="FULL_HYBRID only: run FULL step every N outer steps; FO otherwise.",
+    )
     parser.add_argument("--seq-len", type=int, default=32)
     parser.add_argument("--num-signal-positions", type=int, default=4)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--autocast", action="store_true", help="Enable torch.autocast during training")
+    parser.add_argument(
+        "--profile-meta-bwd",
+        action="store_true",
+        help="Enable Triton meta backward timing counters via THERIA_TRITON_META_PROFILE=1.",
+    )
     parser.add_argument("--csv-out", type=str, default=None)
     args = parser.parse_args()
 
@@ -322,6 +378,8 @@ def main() -> None:
             inner_steps=args.inner_steps,
             inner_lr=args.inner_lr,
             outer_lr=args.outer_lr,
+            meta_every_n_outer=args.meta_every_n_outer,
+            profile_meta_bwd=args.profile_meta_bwd,
             seq_len=args.seq_len,
             num_signal_positions=args.num_signal_positions,
             device=torch.device(args.device),
@@ -343,6 +401,9 @@ def main() -> None:
             "dtype": "NA",
             "compute_dtype": "NA",
             "autocast": int(bool(args.autocast)),
+            "meta_every_n_outer": int(args.meta_every_n_outer if args.mode == "FULL_HYBRID" else 0),
+            "n_hybrid_meta_steps": 0,
+            "n_hybrid_fo_steps": 0,
             "final_loss": float("nan"),
             "final_acc": float("nan"),
             "attn_grad_present": "False",
@@ -357,6 +418,12 @@ def main() -> None:
             "convergence_delta": float("nan"),
             "n_fast_bwd": 0,
             "n_meta_bwd": 0,
+            "fast_bwd_time_s": float("nan"),
+            "meta_bwd_time_s": float("nan"),
+            "meta_recompute_time_s": float("nan"),
+            "fast_bwd_time_per_outer_step_s": float("nan"),
+            "meta_bwd_time_per_outer_step_s": float("nan"),
+            "meta_recompute_time_per_outer_step_s": float("nan"),
         }
         status, error = "HARD_FAIL_OTHER", repr(e)
 
@@ -373,6 +440,8 @@ def main() -> None:
         f"mean_outer_step_time_s={row['mean_outer_step_time_s']} "
         f"n_fast_bwd={row.get('n_fast_bwd',0)} "
         f"n_meta_bwd={row.get('n_meta_bwd',0)} "
+        f"meta_bwd_time_s={row.get('meta_bwd_time_s',0.0)} "
+        f"meta_recompute_time_s={row.get('meta_recompute_time_s',0.0)} "
         f"status={status}"
     )
 
@@ -397,6 +466,9 @@ def main() -> None:
                     "dtype",
                     "compute_dtype",
                     "autocast",
+                    "meta_every_n_outer",
+                    "n_hybrid_meta_steps",
+                    "n_hybrid_fo_steps",
                     "final_loss",
                     "final_acc",
                     "attn_grad_present",
@@ -410,6 +482,12 @@ def main() -> None:
                     "peak_cuda_mem_bytes",
                     "n_fast_bwd",
                     "n_meta_bwd",
+                    "fast_bwd_time_s",
+                    "meta_bwd_time_s",
+                    "meta_recompute_time_s",
+                    "fast_bwd_time_per_outer_step_s",
+                    "meta_bwd_time_per_outer_step_s",
+                    "meta_recompute_time_per_outer_step_s",
                     "status",
                     "error",
                     "convergence_delta",

@@ -159,6 +159,43 @@ def main() -> None:
         type=str,
         default="experiments/phase12/runs/phase12_meta_contract_checks_summary.csv",
     )
+    parser.add_argument(
+        "--fail-on-gate",
+        action="store_true",
+        help="Exit non-zero if any summary row fails the regression gate.",
+    )
+    parser.add_argument(
+        "--min-cosine-full-mean",
+        type=float,
+        default=0.999,
+        help="Minimum allowed cosine_full_mean for a passing gate row.",
+    )
+    parser.add_argument(
+        "--min-cosine-fo-mean",
+        type=float,
+        default=0.999,
+        help="Minimum allowed cosine_fo_mean for a passing gate row.",
+    )
+    parser.add_argument(
+        "--max-rel-diff-abs-error",
+        type=float,
+        default=5e-4,
+        help=(
+            "Maximum allowed abs(rel_diff_candidate_mean - rel_diff_ref_mean) "
+            "for a passing gate row."
+        ),
+    )
+    parser.add_argument(
+        "--require-trend-sign-match",
+        action="store_true",
+        help="Require trend_sign_match=1 for each summary row.",
+    )
+    parser.add_argument(
+        "--gate-csv-out",
+        type=str,
+        default=None,
+        help="Optional CSV path for per-row gate status.",
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -392,8 +429,72 @@ def main() -> None:
         w.writeheader()
         w.writerows(summary_rows)
 
+    gate_rows: list[dict[str, float | int | str]] = []
+    n_failed = 0
+    for row in summary_rows:
+        cos_full = float(row["cosine_full_mean"])
+        cos_fo = float(row["cosine_fo_mean"])
+        rel_ref = float(row["rel_diff_ref_mean"])
+        rel_cand = float(row["rel_diff_candidate_mean"])
+        rel_abs_err = abs(rel_cand - rel_ref)
+        trend_ok = (not args.require_trend_sign_match) or int(row["trend_sign_match"]) == 1
+        passed = (
+            cos_full >= args.min_cosine_full_mean
+            and cos_fo >= args.min_cosine_fo_mean
+            and rel_abs_err <= args.max_rel_diff_abs_error
+            and trend_ok
+        )
+        if not passed:
+            n_failed += 1
+        gate_rows.append(
+            {
+                "profile": row["profile"],
+                "inner_steps": row["inner_steps"],
+                "cosine_full_mean": cos_full,
+                "cosine_fo_mean": cos_fo,
+                "rel_diff_ref_mean": rel_ref,
+                "rel_diff_candidate_mean": rel_cand,
+                "rel_diff_abs_error": rel_abs_err,
+                "trend_sign_match": row["trend_sign_match"],
+                "gate_pass": int(passed),
+            }
+        )
+
+    gate_csv_out = Path(args.gate_csv_out) if args.gate_csv_out else summary_path.with_name(
+        f"{summary_path.stem}_gate.csv"
+    )
+    gate_csv_out.parent.mkdir(parents=True, exist_ok=True)
+    with gate_csv_out.open("w", newline="") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "profile",
+                "inner_steps",
+                "cosine_full_mean",
+                "cosine_fo_mean",
+                "rel_diff_ref_mean",
+                "rel_diff_candidate_mean",
+                "rel_diff_abs_error",
+                "trend_sign_match",
+                "gate_pass",
+            ],
+        )
+        w.writeheader()
+        w.writerows(gate_rows)
+
     print(f"wrote {out_path}")
     print(f"wrote {summary_path}")
+    print(f"wrote {gate_csv_out}")
+
+    if args.fail_on_gate and n_failed > 0:
+        print(
+            f"gate FAILED: {n_failed}/{len(gate_rows)} rows failed "
+            f"(min_cos_full={args.min_cosine_full_mean}, "
+            f"min_cos_fo={args.min_cosine_fo_mean}, "
+            f"max_rel_abs_err={args.max_rel_diff_abs_error}, "
+            f"require_trend={int(args.require_trend_sign_match)})"
+        )
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

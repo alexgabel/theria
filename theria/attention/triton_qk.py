@@ -18,22 +18,47 @@ from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa
 _TRITON_META_BWD_COUNTERS = {
     "n_fast_bwd": 0,
     "n_meta_bwd": 0,
+    "fast_bwd_time_s": 0.0,
+    "meta_bwd_time_s": 0.0,
+    "meta_recompute_time_s": 0.0,
 }
 
 
 def reset_triton_meta_bwd_counters() -> None:
     _TRITON_META_BWD_COUNTERS["n_fast_bwd"] = 0
     _TRITON_META_BWD_COUNTERS["n_meta_bwd"] = 0
+    _TRITON_META_BWD_COUNTERS["fast_bwd_time_s"] = 0.0
+    _TRITON_META_BWD_COUNTERS["meta_bwd_time_s"] = 0.0
+    _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"] = 0.0
 
 
-def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, int]:
+def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, float]:
     out = {
         "n_fast_bwd": int(_TRITON_META_BWD_COUNTERS["n_fast_bwd"]),
         "n_meta_bwd": int(_TRITON_META_BWD_COUNTERS["n_meta_bwd"]),
+        "fast_bwd_time_s": float(_TRITON_META_BWD_COUNTERS["fast_bwd_time_s"]),
+        "meta_bwd_time_s": float(_TRITON_META_BWD_COUNTERS["meta_bwd_time_s"]),
+        "meta_recompute_time_s": float(
+            _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"]
+        ),
     }
     if reset:
         reset_triton_meta_bwd_counters()
     return out
+
+
+def _meta_bwd_profile_enabled(grad_out: torch.Tensor) -> bool:
+    if os.getenv("THERIA_TRITON_META_PROFILE", "0") != "1":
+        return False
+    if not grad_out.is_cuda:
+        return False
+    return not torch.cuda.is_current_stream_capturing()
+
+
+def _cuda_elapsed_s(start_event: torch.cuda.Event, end_event: torch.cuda.Event) -> float:
+    end_event.record()
+    end_event.synchronize()
+    return float(start_event.elapsed_time(end_event) / 1000.0)
 
 
 @triton.autotune(
@@ -438,11 +463,21 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
         # Explicit trigger: use meta-safe path only when the backward itself is
         # being tracked (create_graph=True) or when force-enabled by env flag.
         use_autograd_recompute = force_autograd or bool(getattr(grad_out, "requires_grad", False))
+        profile_enabled = _meta_bwd_profile_enabled(grad_out)
+        bwd_start = bwd_end = None
+        if profile_enabled:
+            bwd_start = torch.cuda.Event(enable_timing=True)
+            bwd_end = torch.cuda.Event(enable_timing=True)
+            bwd_start.record()
         if not use_autograd_recompute:
             _TRITON_META_BWD_COUNTERS["n_fast_bwd"] += 1
             dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale)
             dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale)
             dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+            if profile_enabled and bwd_start is not None and bwd_end is not None:
+                _TRITON_META_BWD_COUNTERS["fast_bwd_time_s"] += _cuda_elapsed_s(
+                    bwd_start, bwd_end
+                )
             return dq, dk, dv
 
         _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
@@ -452,10 +487,19 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
         k_ = k if k.requires_grad else k.detach().requires_grad_(True)
         v_ = v if v.requires_grad else v.detach().requires_grad_(True)
 
+        recompute_start = recompute_end = None
+        if profile_enabled:
+            recompute_start = torch.cuda.Event(enable_timing=True)
+            recompute_end = torch.cuda.Event(enable_timing=True)
+            recompute_start.record()
         with torch.enable_grad():
             scores = torch.matmul(q_, k_.transpose(-2, -1)) * scale
             probs = torch.softmax(scores, dim=-1)
             out = torch.matmul(probs, v_)
+        if profile_enabled and recompute_start is not None and recompute_end is not None:
+            _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"] += _cuda_elapsed_s(
+                recompute_start, recompute_end
+            )
 
         grad_q, grad_k, grad_v = torch.autograd.grad(
             outputs=out,
@@ -466,6 +510,10 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
             create_graph=True,
             allow_unused=False,
         )
+        if profile_enabled and bwd_start is not None and bwd_end is not None:
+            _TRITON_META_BWD_COUNTERS["meta_bwd_time_s"] += _cuda_elapsed_s(
+                bwd_start, bwd_end
+            )
         return grad_q, grad_k, grad_v
 
 
@@ -496,16 +544,31 @@ class TritonFusedSDPAFunctionFullAutograd(torch.autograd.Function):
         q, k, v = ctx.saved_tensors
         scale = ctx.scale
         _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+        profile_enabled = _meta_bwd_profile_enabled(grad_out)
+        bwd_start = bwd_end = None
+        if profile_enabled:
+            bwd_start = torch.cuda.Event(enable_timing=True)
+            bwd_end = torch.cuda.Event(enable_timing=True)
+            bwd_start.record()
 
         # Preserve graph connectivity for full-curvature double-backward.
         q_ = q if q.requires_grad else q.detach().requires_grad_(True)
         k_ = k if k.requires_grad else k.detach().requires_grad_(True)
         v_ = v if v.requires_grad else v.detach().requires_grad_(True)
 
+        recompute_start = recompute_end = None
+        if profile_enabled:
+            recompute_start = torch.cuda.Event(enable_timing=True)
+            recompute_end = torch.cuda.Event(enable_timing=True)
+            recompute_start.record()
         with torch.enable_grad():
             scores = torch.matmul(q_, k_.transpose(-2, -1)) * scale
             probs = torch.softmax(scores, dim=-1)
             out = torch.matmul(probs, v_)
+        if profile_enabled and recompute_start is not None and recompute_end is not None:
+            _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"] += _cuda_elapsed_s(
+                recompute_start, recompute_end
+            )
 
         grad_q, grad_k, grad_v = torch.autograd.grad(
             outputs=out,
@@ -515,6 +578,10 @@ class TritonFusedSDPAFunctionFullAutograd(torch.autograd.Function):
             create_graph=True,
             allow_unused=False,
         )
+        if profile_enabled and bwd_start is not None and bwd_end is not None:
+            _TRITON_META_BWD_COUNTERS["meta_bwd_time_s"] += _cuda_elapsed_s(
+                bwd_start, bwd_end
+            )
         return grad_q, grad_k, grad_v
 
 

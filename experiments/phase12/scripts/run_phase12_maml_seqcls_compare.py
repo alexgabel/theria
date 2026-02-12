@@ -49,6 +49,7 @@ def _resolve_mode_lrs(mode: str, args: argparse.Namespace) -> tuple[float, float
         "FO": (args.fo_inner_lr, args.fo_outer_lr),
         "FO_STRICT": (args.fo_strict_inner_lr, args.fo_strict_outer_lr),
         "FULL_FROZEN": (args.full_frozen_inner_lr, args.full_frozen_outer_lr),
+        "FULL_HYBRID": (args.full_hybrid_inner_lr, args.full_hybrid_outer_lr),
     }
     inner_override, outer_override = mode_overrides.get(mode_key, (None, None))
     inner_lr = float(inner_override) if inner_override is not None else float(args.inner_lr)
@@ -68,7 +69,7 @@ def main() -> None:
         "--modes",
         type=str,
         default="FULL,FO",
-        help="Comma-separated modes (FULL,FO,FO_STRICT,FULL_FROZEN).",
+        help="Comma-separated modes (FULL,FO,FO_STRICT,FULL_FROZEN,FULL_HYBRID).",
     )
     parser.add_argument(
         "--inner-steps",
@@ -128,6 +129,19 @@ def main() -> None:
     parser.add_argument("--fo-strict-outer-lr", type=float, default=None)
     parser.add_argument("--full-frozen-inner-lr", type=float, default=None)
     parser.add_argument("--full-frozen-outer-lr", type=float, default=None)
+    parser.add_argument("--full-hybrid-inner-lr", type=float, default=None)
+    parser.add_argument("--full-hybrid-outer-lr", type=float, default=None)
+    parser.add_argument(
+        "--meta-every-n-outer",
+        type=int,
+        default=2,
+        help="FULL_HYBRID only: run FULL step every N outer steps.",
+    )
+    parser.add_argument(
+        "--profile-meta-bwd",
+        action="store_true",
+        help="Enable Triton meta backward timing counters during runs.",
+    )
     parser.add_argument("--seq-len", type=int, default=32)
     parser.add_argument("--num-signal-positions", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda")
@@ -169,6 +183,9 @@ def main() -> None:
         "dtype",
         "compute_dtype",
         "autocast",
+        "meta_every_n_outer",
+        "n_hybrid_meta_steps",
+        "n_hybrid_fo_steps",
         "final_loss",
         "final_acc",
         "attn_grad_present",
@@ -182,6 +199,12 @@ def main() -> None:
         "peak_cuda_mem_bytes",
         "n_fast_bwd",
         "n_meta_bwd",
+        "fast_bwd_time_s",
+        "meta_bwd_time_s",
+        "meta_recompute_time_s",
+        "fast_bwd_time_per_outer_step_s",
+        "meta_bwd_time_per_outer_step_s",
+        "meta_recompute_time_per_outer_step_s",
         "status",
         "error",
         "convergence_delta",
@@ -219,6 +242,8 @@ def main() -> None:
                             inner_steps=inner_steps,
                             inner_lr=pilot_inner_lr,
                             outer_lr=pilot_outer_lr,
+                            meta_every_n_outer=args.meta_every_n_outer,
+                            profile_meta_bwd=args.profile_meta_bwd,
                             seq_len=args.seq_len,
                             num_signal_positions=args.num_signal_positions,
                             device=device,
@@ -266,6 +291,8 @@ def main() -> None:
                                 inner_steps=inner_steps,
                                 inner_lr=run_inner_lr,
                                 outer_lr=run_outer_lr,
+                                meta_every_n_outer=args.meta_every_n_outer,
+                                profile_meta_bwd=args.profile_meta_bwd,
                                 seq_len=args.seq_len,
                                 num_signal_positions=args.num_signal_positions,
                                 device=device,
@@ -287,6 +314,11 @@ def main() -> None:
                                 "dtype": "NA",
                                 "compute_dtype": "NA",
                                 "autocast": int(bool(args.autocast)),
+                                "meta_every_n_outer": int(
+                                    args.meta_every_n_outer if mode == "FULL_HYBRID" else 0
+                                ),
+                                "n_hybrid_meta_steps": 0,
+                                "n_hybrid_fo_steps": 0,
                                 "final_loss": float("nan"),
                                 "final_acc": float("nan"),
                                 "attn_grad_present": "False",
@@ -301,6 +333,12 @@ def main() -> None:
                                 "convergence_delta": float("nan"),
                                 "n_fast_bwd": 0,
                                 "n_meta_bwd": 0,
+                                "fast_bwd_time_s": float("nan"),
+                                "meta_bwd_time_s": float("nan"),
+                                "meta_recompute_time_s": float("nan"),
+                                "fast_bwd_time_per_outer_step_s": float("nan"),
+                                "meta_bwd_time_per_outer_step_s": float("nan"),
+                                "meta_recompute_time_per_outer_step_s": float("nan"),
                             }
                             status, error = "HARD_FAIL_OTHER", repr(e)
 
@@ -320,6 +358,9 @@ def main() -> None:
                             "outer_lr": run_outer_lr,
                             "outer_steps": run_outer_steps,
                             "inner_lr": run_inner_lr,
+                            "meta_every_n_outer": (
+                                int(args.meta_every_n_outer) if mode == "FULL_HYBRID" else 0
+                            ),
                             "seq_len": args.seq_len,
                             "num_signal_positions": args.num_signal_positions,
                             "wall_clock_budget_s": (
@@ -378,6 +419,16 @@ def main() -> None:
                     "n_fast_bwd_std",
                     "n_meta_bwd_mean",
                     "n_meta_bwd_std",
+                    "fast_bwd_time_per_outer_step_s_mean",
+                    "fast_bwd_time_per_outer_step_s_std",
+                    "meta_bwd_time_per_outer_step_s_mean",
+                    "meta_bwd_time_per_outer_step_s_std",
+                    "meta_recompute_time_per_outer_step_s_mean",
+                    "meta_recompute_time_per_outer_step_s_std",
+                    "n_hybrid_meta_steps_mean",
+                    "n_hybrid_meta_steps_std",
+                    "n_hybrid_fo_steps_mean",
+                    "n_hybrid_fo_steps_std",
                 ]
             )
             for (backend, mode, inner_steps), items in sorted(groups.items()):
@@ -402,6 +453,31 @@ def main() -> None:
                 outer_steps_vals = [
                     float(x["outer_steps"]) for x in items if str(x.get("status")) == "OK"
                 ]
+                fast_bwd_time_step_vals = [
+                    float(x["fast_bwd_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                meta_bwd_time_step_vals = [
+                    float(x["meta_bwd_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                meta_recompute_time_step_vals = [
+                    float(x["meta_recompute_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                hybrid_meta_step_vals = [
+                    float(x["n_hybrid_meta_steps"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                hybrid_fo_step_vals = [
+                    float(x["n_hybrid_fo_steps"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
                 w.writerow(
                     [
                         backend,
@@ -424,6 +500,16 @@ def main() -> None:
                         _std(n_fast_bwd_vals),
                         _mean(n_meta_bwd_vals),
                         _std(n_meta_bwd_vals),
+                        _mean(fast_bwd_time_step_vals),
+                        _std(fast_bwd_time_step_vals),
+                        _mean(meta_bwd_time_step_vals),
+                        _std(meta_bwd_time_step_vals),
+                        _mean(meta_recompute_time_step_vals),
+                        _std(meta_recompute_time_step_vals),
+                        _mean(hybrid_meta_step_vals),
+                        _std(hybrid_meta_step_vals),
+                        _mean(hybrid_fo_step_vals),
+                        _std(hybrid_fo_step_vals),
                     ]
                 )
 

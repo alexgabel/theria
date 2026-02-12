@@ -43,6 +43,14 @@ extra_lr_args=()
 [[ -n "${FO_STRICT_OUTER_LR:-}" ]] && extra_lr_args+=(--fo-strict-outer-lr "${FO_STRICT_OUTER_LR}")
 [[ -n "${FULL_FROZEN_INNER_LR:-}" ]] && extra_lr_args+=(--full-frozen-inner-lr "${FULL_FROZEN_INNER_LR}")
 [[ -n "${FULL_FROZEN_OUTER_LR:-}" ]] && extra_lr_args+=(--full-frozen-outer-lr "${FULL_FROZEN_OUTER_LR}")
+[[ -n "${FULL_HYBRID_INNER_LR:-}" ]] && extra_lr_args+=(--full-hybrid-inner-lr "${FULL_HYBRID_INNER_LR}")
+[[ -n "${FULL_HYBRID_OUTER_LR:-}" ]] && extra_lr_args+=(--full-hybrid-outer-lr "${FULL_HYBRID_OUTER_LR}")
+
+extra_mode_args=()
+[[ -n "${META_EVERY_N_OUTER:-}" ]] && extra_mode_args+=(--meta-every-n-outer "${META_EVERY_N_OUTER}")
+if [[ "${PROFILE_META_BWD:-0}" == "1" ]]; then
+  extra_mode_args+=(--profile-meta-bwd)
+fi
 
 echo "== Equal-step run =="
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.py \
@@ -59,7 +67,8 @@ PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.
   --device "${DEVICE}" \
   --csv-out "${STEP_CSV}" \
   --summary-out "${STEP_SUMMARY}" \
-  "${extra_lr_args[@]}"
+  "${extra_lr_args[@]}" \
+  "${extra_mode_args[@]}"
 
 echo "== Equal-time run =="
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.py \
@@ -80,7 +89,8 @@ PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.
   --device "${DEVICE}" \
   --csv-out "${TIME_CSV}" \
   --summary-out "${TIME_SUMMARY}" \
-  "${extra_lr_args[@]}"
+  "${extra_lr_args[@]}" \
+  "${extra_mode_args[@]}"
 
 echo "wrote ${STEP_CSV}"
 echo "wrote ${STEP_SUMMARY}"
