@@ -2,7 +2,7 @@
 """
 Rank (meta_every_n_outer, meta_last_n_inner) settings from equal-time summaries.
 
-Default target is triton_fused_meta + FULL_HYBRID using Phase-12 summary CSVs.
+Default target is triton_fused_meta_strict + FULL_HYBRID using Phase-12 summary CSVs.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def main() -> None:
         default="experiments/phase12/runs/phase12_maml_seqcls_equal_time_*_summary.csv",
         help="Glob for summary CSV files.",
     )
-    parser.add_argument("--backend", type=str, default="triton_fused_meta")
+    parser.add_argument("--backend", type=str, default="triton_fused_meta_strict")
     parser.add_argument("--mode", type=str, default="FULL_HYBRID")
     parser.add_argument(
         "--protocol",

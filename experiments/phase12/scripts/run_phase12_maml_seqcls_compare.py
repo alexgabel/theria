@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from collections import defaultdict
@@ -25,6 +26,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.phase12.scripts.run_phase12_behavior import run_behavior
 
+EXPERIMENTAL_BACKENDS = {"triton_fused_meta"}
+
 
 def _parse_int_list(s: str) -> list[int]:
     return [int(x.strip()) for x in s.split(",") if x.strip()]
@@ -35,11 +38,13 @@ def _parse_str_list(s: str) -> list[str]:
 
 
 def _mean(vals: list[float]) -> float:
-    return float(statistics.mean(vals)) if vals else float("nan")
+    finite_vals = [v for v in vals if math.isfinite(v)]
+    return float(statistics.mean(finite_vals)) if finite_vals else float("nan")
 
 
 def _std(vals: list[float]) -> float:
-    return float(statistics.pstdev(vals)) if len(vals) > 1 else 0.0
+    finite_vals = [v for v in vals if math.isfinite(v)]
+    return float(statistics.pstdev(finite_vals)) if len(finite_vals) > 1 else 0.0
 
 
 def _resolve_mode_lrs(mode: str, args: argparse.Namespace) -> tuple[float, float]:
@@ -62,13 +67,13 @@ def main() -> None:
     parser.add_argument(
         "--backends",
         type=str,
-        default="reference,triton_fused",
+        default="triton_fused_meta_strict",
         help="Comma-separated backends.",
     )
     parser.add_argument(
         "--modes",
         type=str,
-        default="FULL,FO",
+        default="FULL,FULL_HYBRID",
         help="Comma-separated modes (FULL,FO,FO_STRICT,FULL_FROZEN,FULL_HYBRID).",
     )
     parser.add_argument(
@@ -134,7 +139,7 @@ def main() -> None:
     parser.add_argument(
         "--meta-every-n-outer",
         type=int,
-        default=2,
+        default=8,
         help="FULL_HYBRID only: run FULL step every N outer steps.",
     )
     parser.add_argument(
@@ -150,6 +155,16 @@ def main() -> None:
         "--profile-meta-bwd",
         action="store_true",
         help="Enable Triton meta backward timing counters during runs.",
+    )
+    parser.add_argument(
+        "--no-fail-on-nonfinite",
+        action="store_true",
+        help="Pass through to run_behavior (debug only).",
+    )
+    parser.add_argument(
+        "--allow-experimental-backends",
+        action="store_true",
+        help="Opt in to experimental backend(s) such as triton_fused_meta.",
     )
     parser.add_argument("--seq-len", type=int, default=32)
     parser.add_argument("--num-signal-positions", type=int, default=4)
@@ -174,6 +189,13 @@ def main() -> None:
     inner_steps_list = _parse_int_list(args.inner_steps)
     seeds = _parse_int_list(args.seeds)
     device = torch.device(args.device)
+    blocked = [b for b in backends if b in EXPERIMENTAL_BACKENDS]
+    if blocked and not args.allow_experimental_backends:
+        blocked_str = ",".join(sorted(set(blocked)))
+        raise ValueError(
+            f"Experimental backend(s) requested: {blocked_str}. "
+            "Pass --allow-experimental-backends to opt in."
+        )
 
     fieldnames = [
         "comparison_protocol",
@@ -209,12 +231,15 @@ def main() -> None:
         "peak_cuda_mem_bytes",
         "n_fast_bwd",
         "n_meta_bwd",
+        "n_fallback_bwd",
         "fast_bwd_time_s",
         "meta_bwd_time_s",
         "meta_recompute_time_s",
+        "fallback_bwd_time_s",
         "fast_bwd_time_per_outer_step_s",
         "meta_bwd_time_per_outer_step_s",
         "meta_recompute_time_per_outer_step_s",
+        "fallback_bwd_time_per_outer_step_s",
         "status",
         "error",
         "convergence_delta",
@@ -255,6 +280,7 @@ def main() -> None:
                             meta_every_n_outer=args.meta_every_n_outer,
                             meta_last_n_inner=args.meta_last_n_inner,
                             profile_meta_bwd=args.profile_meta_bwd,
+                            allow_experimental_backends=args.allow_experimental_backends,
                             seq_len=args.seq_len,
                             num_signal_positions=args.num_signal_positions,
                             device=device,
@@ -305,12 +331,23 @@ def main() -> None:
                                 meta_every_n_outer=args.meta_every_n_outer,
                                 meta_last_n_inner=args.meta_last_n_inner,
                                 profile_meta_bwd=args.profile_meta_bwd,
+                                fail_on_nonfinite=not args.no_fail_on_nonfinite,
+                                allow_experimental_backends=args.allow_experimental_backends,
                                 seq_len=args.seq_len,
                                 num_signal_positions=args.num_signal_positions,
                                 device=device,
                                 autocast_enabled=args.autocast,
                             )
                             status, error = "OK", ""
+                            for key in ("final_loss", "final_acc"):
+                                try:
+                                    v = float(row.get(key, float("nan")))
+                                except (TypeError, ValueError):
+                                    v = float("nan")
+                                if not math.isfinite(v):
+                                    status = "HARD_FAIL_NONFINITE"
+                                    error = f"non_finite_{key}"
+                                    break
                         except Exception as e:
                             row = {
                                 "backend": backend,
@@ -350,14 +387,21 @@ def main() -> None:
                                 "convergence_delta": float("nan"),
                                 "n_fast_bwd": 0,
                                 "n_meta_bwd": 0,
+                                "n_fallback_bwd": 0,
                                 "fast_bwd_time_s": float("nan"),
                                 "meta_bwd_time_s": float("nan"),
                                 "meta_recompute_time_s": float("nan"),
+                                "fallback_bwd_time_s": float("nan"),
                                 "fast_bwd_time_per_outer_step_s": float("nan"),
                                 "meta_bwd_time_per_outer_step_s": float("nan"),
                                 "meta_recompute_time_per_outer_step_s": float("nan"),
+                                "fallback_bwd_time_per_outer_step_s": float("nan"),
                             }
-                            status, error = "HARD_FAIL_OTHER", repr(e)
+                            err_str = repr(e)
+                            if "NONFINITE" in err_str or "non_finite" in err_str:
+                                status, error = "HARD_FAIL_NONFINITE", err_str
+                            else:
+                                status, error = "HARD_FAIL_OTHER", err_str
 
                         row = {
                             **row,
@@ -442,12 +486,16 @@ def main() -> None:
                     "n_fast_bwd_std",
                     "n_meta_bwd_mean",
                     "n_meta_bwd_std",
+                    "n_fallback_bwd_mean",
+                    "n_fallback_bwd_std",
                     "fast_bwd_time_per_outer_step_s_mean",
                     "fast_bwd_time_per_outer_step_s_std",
                     "meta_bwd_time_per_outer_step_s_mean",
                     "meta_bwd_time_per_outer_step_s_std",
                     "meta_recompute_time_per_outer_step_s_mean",
                     "meta_recompute_time_per_outer_step_s_std",
+                    "fallback_bwd_time_per_outer_step_s_mean",
+                    "fallback_bwd_time_per_outer_step_s_std",
                     "n_hybrid_meta_steps_mean",
                     "n_hybrid_meta_steps_std",
                     "n_hybrid_fo_steps_mean",
@@ -473,6 +521,9 @@ def main() -> None:
                 n_meta_bwd_vals = [
                     float(x["n_meta_bwd"]) for x in items if str(x.get("status")) == "OK"
                 ]
+                n_fallback_bwd_vals = [
+                    float(x["n_fallback_bwd"]) for x in items if str(x.get("status")) == "OK"
+                ]
                 outer_steps_vals = [
                     float(x["outer_steps"]) for x in items if str(x.get("status")) == "OK"
                 ]
@@ -488,6 +539,11 @@ def main() -> None:
                 ]
                 meta_recompute_time_step_vals = [
                     float(x["meta_recompute_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                fallback_time_step_vals = [
+                    float(x["fallback_bwd_time_per_outer_step_s"])
                     for x in items
                     if str(x.get("status")) == "OK"
                 ]
@@ -530,12 +586,16 @@ def main() -> None:
                         _std(n_fast_bwd_vals),
                         _mean(n_meta_bwd_vals),
                         _std(n_meta_bwd_vals),
+                        _mean(n_fallback_bwd_vals),
+                        _std(n_fallback_bwd_vals),
                         _mean(fast_bwd_time_step_vals),
                         _std(fast_bwd_time_step_vals),
                         _mean(meta_bwd_time_step_vals),
                         _std(meta_bwd_time_step_vals),
                         _mean(meta_recompute_time_step_vals),
                         _std(meta_recompute_time_step_vals),
+                        _mean(fallback_time_step_vals),
+                        _std(fallback_time_step_vals),
                         _mean(hybrid_meta_step_vals),
                         _std(hybrid_meta_step_vals),
                         _mean(hybrid_fo_step_vals),

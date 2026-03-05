@@ -38,6 +38,7 @@ from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_s
 
 
 Mode = Literal["FULL", "FO", "FO_STRICT", "FULL_FROZEN", "FULL_HYBRID"]
+EXPERIMENTAL_BACKENDS = {"triton_fused_meta"}
 
 
 def _mean_last(values: list[float], n: int) -> float:
@@ -71,9 +72,16 @@ def run_behavior(
     meta_every_n_outer: int = 2,
     meta_last_n_inner: int = 0,
     profile_meta_bwd: bool = False,
+    fail_on_nonfinite: bool = True,
+    allow_experimental_backends: bool = False,
     grad_eps: float | None = None,
     rel_diff_probe: bool = True,
 ) -> dict[str, float | int | str]:
+    if attention_backend in EXPERIMENTAL_BACKENDS and not allow_experimental_backends:
+        raise ValueError(
+            f"Backend '{attention_backend}' is experimental. "
+            "Pass --allow-experimental-backends to opt in."
+        )
     if num_signal_positions >= seq_len:
         raise ValueError("num_signal_positions must be < seq_len (position 0 is reserved).")
     if mode == "FULL_HYBRID" and meta_every_n_outer < 1:
@@ -197,13 +205,26 @@ def run_behavior(
                     fo=fo_step,
                     fo_strict=fo_strict_step,
                     meta_last_n_inner=meta_last_n_inner_step,
+                    check_finite=fail_on_nonfinite,
+                    finite_prefix=f"outer_step={step_idx}",
                     return_metrics=True,
                 )
+                if fail_on_nonfinite and not torch.isfinite(outer_loss):
+                    raise RuntimeError(
+                        f"NONFINITE outer_loss outer_step={step_idx}"
+                    )
                 outer_loss.backward()
 
         qg = model.q_proj.weight.grad
         kg = model.k_proj.weight.grad
         vg = model.v_proj.weight.grad
+        if fail_on_nonfinite:
+            if qg is not None and not torch.isfinite(qg).all():
+                raise RuntimeError(f"NONFINITE grad[q_proj] outer_step={step_idx}")
+            if kg is not None and not torch.isfinite(kg).all():
+                raise RuntimeError(f"NONFINITE grad[k_proj] outer_step={step_idx}")
+            if vg is not None and not torch.isfinite(vg).all():
+                raise RuntimeError(f"NONFINITE grad[v_proj] outer_step={step_idx}")
         q_grad_norms.append(float(qg.norm().item()) if qg is not None else 0.0)
         k_grad_norms.append(float(kg.norm().item()) if kg is not None else 0.0)
         v_grad_norms.append(float(vg.norm().item()) if vg is not None else 0.0)
@@ -255,6 +276,8 @@ def run_behavior(
                 fo=False,
                 fo_strict=False,
                 meta_last_n_inner=meta_last_n_inner,
+                check_finite=fail_on_nonfinite,
+                finite_prefix="probe_full",
                 return_metrics=False,
             )
             outer_fo = meta_loss_on_tasks(
@@ -265,6 +288,8 @@ def run_behavior(
                 fo=True,
                 fo_strict=False,
                 meta_last_n_inner=0,
+                check_finite=fail_on_nonfinite,
+                finite_prefix="probe_fo",
                 return_metrics=False,
             )
             eps_probe = 1e-9
@@ -311,15 +336,21 @@ def run_behavior(
         "peak_cuda_mem_bytes": peak_cuda_mem_bytes,
         "n_fast_bwd": int(meta_bwd_counts["n_fast_bwd"]),
         "n_meta_bwd": int(meta_bwd_counts["n_meta_bwd"]),
+        "n_fallback_bwd": int(meta_bwd_counts.get("n_fallback_bwd", 0)),
         "fast_bwd_time_s": float(meta_bwd_counts.get("fast_bwd_time_s", 0.0)),
         "meta_bwd_time_s": float(meta_bwd_counts.get("meta_bwd_time_s", 0.0)),
         "meta_recompute_time_s": float(meta_bwd_counts.get("meta_recompute_time_s", 0.0)),
+        "fallback_bwd_time_s": float(meta_bwd_counts.get("fallback_bwd_time_s", 0.0)),
         "fast_bwd_time_per_outer_step_s": float(meta_bwd_counts.get("fast_bwd_time_s", 0.0))
         / max(outer_steps, 1),
         "meta_bwd_time_per_outer_step_s": float(meta_bwd_counts.get("meta_bwd_time_s", 0.0))
         / max(outer_steps, 1),
         "meta_recompute_time_per_outer_step_s": float(
             meta_bwd_counts.get("meta_recompute_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "fallback_bwd_time_per_outer_step_s": float(
+            meta_bwd_counts.get("fallback_bwd_time_s", 0.0)
         )
         / max(outer_steps, 1),
     }
@@ -363,7 +394,7 @@ def main() -> None:
     parser.add_argument(
         "--meta-every-n-outer",
         type=int,
-        default=2,
+        default=8,
         help="FULL_HYBRID only: run FULL step every N outer steps; FO otherwise.",
     )
     parser.add_argument(
@@ -384,6 +415,16 @@ def main() -> None:
         action="store_true",
         help="Enable Triton meta backward timing counters via THERIA_TRITON_META_PROFILE=1.",
     )
+    parser.add_argument(
+        "--no-fail-on-nonfinite",
+        action="store_true",
+        help="Disable hard failure on non-finite logits/loss/grads (debug only).",
+    )
+    parser.add_argument(
+        "--allow-experimental-backends",
+        action="store_true",
+        help="Opt in to experimental backend(s) such as triton_fused_meta.",
+    )
     parser.add_argument("--csv-out", type=str, default=None)
     args = parser.parse_args()
 
@@ -400,6 +441,8 @@ def main() -> None:
             meta_every_n_outer=args.meta_every_n_outer,
             meta_last_n_inner=args.meta_last_n_inner,
             profile_meta_bwd=args.profile_meta_bwd,
+            fail_on_nonfinite=not args.no_fail_on_nonfinite,
+            allow_experimental_backends=args.allow_experimental_backends,
             seq_len=args.seq_len,
             num_signal_positions=args.num_signal_positions,
             device=torch.device(args.device),
@@ -441,14 +484,21 @@ def main() -> None:
             "convergence_delta": float("nan"),
             "n_fast_bwd": 0,
             "n_meta_bwd": 0,
+            "n_fallback_bwd": 0,
             "fast_bwd_time_s": float("nan"),
             "meta_bwd_time_s": float("nan"),
             "meta_recompute_time_s": float("nan"),
+            "fallback_bwd_time_s": float("nan"),
             "fast_bwd_time_per_outer_step_s": float("nan"),
             "meta_bwd_time_per_outer_step_s": float("nan"),
             "meta_recompute_time_per_outer_step_s": float("nan"),
+            "fallback_bwd_time_per_outer_step_s": float("nan"),
         }
-        status, error = "HARD_FAIL_OTHER", repr(e)
+        err_str = repr(e)
+        if "NONFINITE" in err_str or "non_finite" in err_str:
+            status, error = "HARD_FAIL_NONFINITE", err_str
+        else:
+            status, error = "HARD_FAIL_OTHER", err_str
 
     print(
         f"backend={row['backend']} mode={row['mode']} seed={row['seed']} "
@@ -464,8 +514,10 @@ def main() -> None:
         f"meta_last_n_inner={row.get('meta_last_n_inner',0)} "
         f"n_fast_bwd={row.get('n_fast_bwd',0)} "
         f"n_meta_bwd={row.get('n_meta_bwd',0)} "
+        f"n_fallback_bwd={row.get('n_fallback_bwd',0)} "
         f"meta_bwd_time_s={row.get('meta_bwd_time_s',0.0)} "
         f"meta_recompute_time_s={row.get('meta_recompute_time_s',0.0)} "
+        f"fallback_bwd_time_s={row.get('fallback_bwd_time_s',0.0)} "
         f"status={status}"
     )
 
@@ -507,12 +559,15 @@ def main() -> None:
                     "peak_cuda_mem_bytes",
                     "n_fast_bwd",
                     "n_meta_bwd",
+                    "n_fallback_bwd",
                     "fast_bwd_time_s",
                     "meta_bwd_time_s",
                     "meta_recompute_time_s",
+                    "fallback_bwd_time_s",
                     "fast_bwd_time_per_outer_step_s",
                     "meta_bwd_time_per_outer_step_s",
                     "meta_recompute_time_per_outer_step_s",
+                    "fallback_bwd_time_per_outer_step_s",
                     "status",
                     "error",
                     "convergence_delta",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run meta-contract checks for both triton_fused_meta and triton_fused_meta_strict,
+Run meta-contract checks for a candidate backend and a strict baseline backend,
 then print a side-by-side delta table.
 """
 
@@ -35,6 +35,7 @@ def _run_check(
     min_cosine_fo_mean: float,
     max_rel_diff_abs_error: float,
     require_trend_sign_match: bool,
+    allow_experimental_backends: bool,
 ) -> None:
     cmd = [
         sys.executable,
@@ -70,6 +71,8 @@ def _run_check(
         cmd.append("--fail-on-gate")
     if require_trend_sign_match:
         cmd.append("--require-trend-sign-match")
+    if allow_experimental_backends:
+        cmd.append("--allow-experimental-backends")
     print(f"\n== Running {candidate_backend} ==")
     print(" ".join(cmd))
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
@@ -97,7 +100,7 @@ def _fmt(x: float) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference-backend", type=str, default="reference")
-    parser.add_argument("--meta-backend", type=str, default="triton_fused_meta")
+    parser.add_argument("--meta-backend", type=str, default="triton_fused_meta_strict")
     parser.add_argument("--strict-backend", type=str, default="triton_fused_meta_strict")
     parser.add_argument("--profiles", type=str, default="seqcls_default,diffusion_proxy")
     parser.add_argument("--inner-steps", type=str, default="2,5,10")
@@ -112,6 +115,11 @@ def main() -> None:
     parser.add_argument("--min-cosine-fo-mean", type=float, default=0.999)
     parser.add_argument("--max-rel-diff-abs-error", type=float, default=5e-4)
     parser.add_argument("--require-trend-sign-match", action="store_true")
+    parser.add_argument(
+        "--allow-experimental-backends",
+        action="store_true",
+        help="Opt in to experimental backend(s) such as triton_fused_meta.",
+    )
     args = parser.parse_args()
 
     if args.device != "cuda" and (
@@ -148,6 +156,7 @@ def main() -> None:
         min_cosine_fo_mean=args.min_cosine_fo_mean,
         max_rel_diff_abs_error=args.max_rel_diff_abs_error,
         require_trend_sign_match=args.require_trend_sign_match,
+        allow_experimental_backends=args.allow_experimental_backends,
     )
     _run_check(
         reference_backend=args.reference_backend,
@@ -165,6 +174,7 @@ def main() -> None:
         min_cosine_fo_mean=args.min_cosine_fo_mean,
         max_rel_diff_abs_error=args.max_rel_diff_abs_error,
         require_trend_sign_match=args.require_trend_sign_match,
+        allow_experimental_backends=args.allow_experimental_backends,
     )
 
     meta_rows = _load_summary(meta_summary)

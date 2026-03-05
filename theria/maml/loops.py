@@ -39,6 +39,14 @@ def loss_fn(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, y)
 
 
+def _assert_finite(t: torch.Tensor, *, name: str, ctx: str) -> None:
+    if torch.isfinite(t).all():
+        return
+    bad = int((~torch.isfinite(t)).sum().item())
+    total = int(t.numel())
+    raise RuntimeError(f"NONFINITE {name} {ctx} bad={bad}/{total}")
+
+
 def inner_adapt(
     model: nn.Module,
     params: Mapping[str, torch.Tensor],
@@ -49,6 +57,8 @@ def inner_adapt(
     inner_steps: int = 1,
     fo: bool = False,
     meta_last_n_inner: int = 0,
+    check_finite: bool = False,
+    finite_prefix: str = "",
 ) -> Params:
     """
     Full MAML inner loop:
@@ -60,7 +70,19 @@ def inner_adapt(
 
     for step_idx in range(inner_steps):
         logits_s = functional_call(model, (phi, buffers), (task.x_s,))
+        if check_finite:
+            _assert_finite(
+                logits_s,
+                name="support_logits",
+                ctx=f"{finite_prefix} inner_step={step_idx}",
+            )
         loss_s = loss_fn(logits_s, task.y_s)
+        if check_finite:
+            _assert_finite(
+                loss_s,
+                name="support_loss",
+                ctx=f"{finite_prefix} inner_step={step_idx}",
+            )
 
         # Optional truncation: keep full second-order graph only for the last
         # N inner updates (useful for hybrid/latency-constrained meta-runs).
@@ -75,6 +97,13 @@ def inner_adapt(
             retain_graph=True,
             allow_unused=False,
         )
+        if check_finite:
+            for (pname, _), g in zip(phi.items(), grads):
+                _assert_finite(
+                    g,
+                    name=f"support_grad[{pname}]",
+                    ctx=f"{finite_prefix} inner_step={step_idx}",
+                )
         # NOTE: create_graph=True is what enables second-order meta-gradients.
         # Removing this turns full MAML into FO-MAML.
         phi = OrderedDict(
@@ -104,6 +133,8 @@ def meta_loss_on_tasks(
     fo: bool = False,
     fo_strict: bool = False,
     meta_last_n_inner: int = 0,
+    check_finite: bool = False,
+    finite_prefix: str = "",
     return_metrics: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
     """
@@ -115,7 +146,8 @@ def meta_loss_on_tasks(
 
     losses = []
     accs = []
-    for task in tasks:
+    for task_idx, task in enumerate(tasks):
+        task_prefix = f"{finite_prefix} task={task_idx}".strip()
         phi = inner_adapt(
             model,
             params,
@@ -125,12 +157,32 @@ def meta_loss_on_tasks(
             inner_steps=inner_steps,
             fo=fo,
             meta_last_n_inner=meta_last_n_inner,
+            check_finite=check_finite,
+            finite_prefix=task_prefix,
         )
         if fo_strict:
             phi = OrderedDict((k, v.detach().clone()) for k, v in phi.items())
         logits_q = functional_call(model, (phi, buffers), (task.x_q,))
+        if check_finite:
+            _assert_finite(
+                logits_q,
+                name="query_logits",
+                ctx=task_prefix,
+            )
         post_loss = loss_fn(logits_q, task.y_q)
+        if check_finite:
+            _assert_finite(
+                post_loss,
+                name="query_loss",
+                ctx=task_prefix,
+            )
         post_acc = (logits_q.argmax(dim=-1) == task.y_q).float().mean()
+        if check_finite:
+            _assert_finite(
+                post_acc,
+                name="query_acc",
+                ctx=task_prefix,
+            )
         losses.append(post_loss)
         accs.append(post_acc)
     outer = torch.stack(losses).mean()

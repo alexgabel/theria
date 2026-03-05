@@ -2,6 +2,8 @@
 set -euo pipefail
 
 # Runs both equal-step and equal-time comparisons with optional mode-specific LR overrides.
+# Stable defaults target triton_fused_meta_strict FULL/FULL_HYBRID; set
+# ALLOW_EXPERIMENTAL_BACKENDS=1 to opt into triton_fused_meta.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
@@ -11,8 +13,8 @@ TAG="${TAG:-$(date +%Y%m%d_%H%M%S)}"
 RUNS_DIR="experiments/phase12/runs"
 mkdir -p "${RUNS_DIR}"
 
-BACKENDS="${BACKENDS:-reference,triton_fused,triton_fused_meta,triton_full_autograd}"
-MODES="${MODES:-FULL,FO}"
+BACKENDS="${BACKENDS:-triton_fused_meta_strict}"
+MODES="${MODES:-FULL,FULL_HYBRID}"
 INNER_STEPS="${INNER_STEPS:-2,5,10}"
 SEEDS="${SEEDS:-0,1,2,3,4}"
 
@@ -22,6 +24,9 @@ OUTER_LR="${OUTER_LR:-1e-3}"
 SEQ_LEN="${SEQ_LEN:-32}"
 NUM_SIGNAL_POSITIONS="${NUM_SIGNAL_POSITIONS:-4}"
 DEVICE="${DEVICE:-cuda}"
+
+META_EVERY_N_OUTER="${META_EVERY_N_OUTER:-8}"
+ALLOW_EXPERIMENTAL_BACKENDS="${ALLOW_EXPERIMENTAL_BACKENDS:-0}"
 
 EQUAL_STEP_OUTER_STEPS="${EQUAL_STEP_OUTER_STEPS:-200}"
 WALL_CLOCK_BUDGET_S="${WALL_CLOCK_BUDGET_S:-30}"
@@ -51,6 +56,9 @@ extra_mode_args=()
 [[ -n "${META_LAST_N_INNER:-}" ]] && extra_mode_args+=(--meta-last-n-inner "${META_LAST_N_INNER}")
 if [[ "${PROFILE_META_BWD:-0}" == "1" ]]; then
   extra_mode_args+=(--profile-meta-bwd)
+fi
+if [[ "${ALLOW_EXPERIMENTAL_BACKENDS}" == "1" ]]; then
+  extra_mode_args+=(--allow-experimental-backends)
 fi
 
 echo "== Equal-step run =="

@@ -8,8 +8,9 @@ cd "${REPO_ROOT}"
 TAG="${TAG:-phase12_meta_gate_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR="${OUT_DIR:-experiments/phase12/runs}"
 REFERENCE_BACKEND="${REFERENCE_BACKEND:-reference}"
-META_BACKEND="${META_BACKEND:-triton_fused_meta}"
+META_BACKEND="${META_BACKEND:-triton_fused_meta_strict}"
 STRICT_BACKEND="${STRICT_BACKEND:-triton_fused_meta_strict}"
+ALLOW_EXPERIMENTAL_BACKENDS="${ALLOW_EXPERIMENTAL_BACKENDS:-0}"
 PROFILES="${PROFILES:-seqcls_default,diffusion_proxy}"
 INNER_STEPS="${INNER_STEPS:-2,5,10}"
 SEEDS="${SEEDS:-0,1}"
@@ -41,6 +42,9 @@ args=(
 
 if [[ "${REQUIRE_TREND_SIGN_MATCH}" == "1" ]]; then
   args+=(--require-trend-sign-match)
+fi
+if [[ "${ALLOW_EXPERIMENTAL_BACKENDS}" == "1" ]]; then
+  args+=(--allow-experimental-backends)
 fi
 
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_meta_contract_dual_compare.py "${args[@]}"

@@ -49,6 +49,7 @@ PROFILE_MAP: dict[str, dict[str, float | int]] = {
         "meta_batch_size": 4,
     },
 }
+EXPERIMENTAL_BACKENDS = {"triton_fused_meta"}
 
 
 def _parse_int_list(s: str) -> list[int]:
@@ -143,7 +144,7 @@ def _trend_sign(values: list[float]) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference-backend", type=str, default="reference")
-    parser.add_argument("--candidate-backend", type=str, default="triton_fused_meta")
+    parser.add_argument("--candidate-backend", type=str, default="triton_fused_meta_strict")
     parser.add_argument("--profiles", type=str, default="seqcls_default,diffusion_proxy")
     parser.add_argument("--inner-steps", type=str, default="2,5,10")
     parser.add_argument("--seeds", type=str, default="0,1")
@@ -196,7 +197,18 @@ def main() -> None:
         default=None,
         help="Optional CSV path for per-row gate status.",
     )
+    parser.add_argument(
+        "--allow-experimental-backends",
+        action="store_true",
+        help="Opt in to experimental backend(s) such as triton_fused_meta.",
+    )
     args = parser.parse_args()
+
+    if args.candidate_backend in EXPERIMENTAL_BACKENDS and not args.allow_experimental_backends:
+        raise ValueError(
+            f"Candidate backend '{args.candidate_backend}' is experimental. "
+            "Pass --allow-experimental-backends to opt in."
+        )
 
     device = torch.device(args.device)
     profiles = _parse_str_list(args.profiles)
