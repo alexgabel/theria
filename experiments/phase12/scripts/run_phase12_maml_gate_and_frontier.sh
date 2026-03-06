@@ -6,7 +6,10 @@ set -euo pipefail
 # 2) run dual-protocol MAML utility frontier.
 # Stable defaults:
 #   - correctness: triton_fused_meta_strict FULL
-#   - practical:   triton_fused_meta_strict FULL_HYBRID (meta_every_n_outer=8)
+# Practical baseline to run explicitly:
+#   - triton_fused_meta_strict FULL_HYBRID
+#   - meta_every_n_outer=8
+#   - meta_last_n_inner=2
 # Set ALLOW_EXPERIMENTAL_BACKENDS=1 to opt into triton_fused_meta.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

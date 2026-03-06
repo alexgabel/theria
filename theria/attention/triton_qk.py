@@ -13,7 +13,12 @@ import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
-from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa_bwd_dk
+from theria.attention.triton_sdpa_backward import (
+    debug_audit_fast_path,
+    sdpa_bwd_dv,
+    sdpa_bwd_dq,
+    sdpa_bwd_dk,
+)
 
 _TRITON_META_BWD_COUNTERS = {
     "n_fast_bwd": 0,
@@ -24,6 +29,10 @@ _TRITON_META_BWD_COUNTERS = {
     "meta_recompute_time_s": 0.0,
     "fallback_bwd_time_s": 0.0,
 }
+_TRITON_SDPA_FWD_DEBUG_ARTIFACTS: dict[int, dict[str, object]] = {}
+_TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX = 0
+_TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = -1
+_TRITON_SDPA_FWD_DEBUG_MAX_ARTIFACTS = 256
 
 
 def reset_triton_meta_bwd_counters() -> None:
@@ -53,6 +62,68 @@ def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, float]:
     if reset:
         reset_triton_meta_bwd_counters()
     return out
+
+
+def _triton_sdpa_fwd_debug_enabled() -> bool:
+    return os.getenv("THERIA_TRITON_FWD_DEBUG", "0") == "1"
+
+
+def reset_triton_sdpa_fwd_debug_artifacts() -> None:
+    global _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX
+    global _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.clear()
+    _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX = 0
+    _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = -1
+
+
+def get_triton_sdpa_fwd_debug_artifact(
+    *,
+    call_index: int | None = None,
+    reset: bool = False,
+) -> dict[str, object]:
+    if call_index is None:
+        call_index = _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    out = dict(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS.get(int(call_index), {}))
+    if reset and call_index in _TRITON_SDPA_FWD_DEBUG_ARTIFACTS:
+        _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.pop(int(call_index), None)
+    return out
+
+
+def get_triton_sdpa_fwd_debug_last_call_index() -> int:
+    return int(_TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX)
+
+
+def _record_triton_sdpa_fwd_debug_artifact(
+    *,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    m: torch.Tensor,
+    l: torch.Tensor,
+    scale: float,
+) -> int:
+    global _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX
+    global _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    if not _triton_sdpa_fwd_debug_enabled():
+        return -1
+    call_index = int(_TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX)
+    _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX += 1
+    _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = call_index
+    _TRITON_SDPA_FWD_DEBUG_ARTIFACTS[call_index] = {
+        "call_index": call_index,
+        "scale": float(scale),
+        "q_shape": tuple(int(x) for x in q.shape),
+        "k_shape": tuple(int(x) for x in k.shape),
+        "q_dtype_write": str(q.dtype),
+        "k_dtype_write": str(k.dtype),
+        "m_dtype_write": str(m.dtype),
+        "l_dtype_write": str(l.dtype),
+        "m": m.detach().cpu(),
+        "l": l.detach().cpu(),
+    }
+    while len(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS) > _TRITON_SDPA_FWD_DEBUG_MAX_ARTIFACTS:
+        oldest = next(iter(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS))
+        _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.pop(oldest, None)
+    return call_index
 
 
 def _meta_bwd_profile_enabled(grad_out: torch.Tensor) -> bool:
@@ -430,6 +501,7 @@ def _fused_sdpa_kernel(
     q_ptrs = Q + pid_bh * stride_qbh + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     q = tl.load(q_ptrs, mask=(offs_m[:, None] < Tq) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
     valid_m = offs_m < Tq
+    valid_m_f = valid_m.to(tl.float32)
 
     for n0 in range(0, Tk, BLOCK_N):
         k_ptrs = K + pid_bh * stride_kbh + (n0 + offs_n)[:, None] * stride_kn + offs_k[None, :] * stride_kk
@@ -437,28 +509,27 @@ def _fused_sdpa_kernel(
         k = tl.load(k_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
         v = tl.load(v_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_dv[None, :] < Dv), other=0.0).to(tl.float32)
 
-        scores = tl.dot(q, tl.trans(k)) * scale  # (BLOCK_M, BLOCK_N)
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale  # (BLOCK_M, BLOCK_N)
         valid_n = (n0 + offs_n) < Tk
         mask_mn = valid_m[:, None] & valid_n[None, :]
+        mask_mn_f = mask_mn.to(tl.float32)
         scores = tl.where(mask_mn, scores, -float("inf"))
 
         m_ij = tl.max(scores, axis=1)
-        m_new = tl.maximum(m_i, m_ij)
-        valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
-        m_new = tl.where(valid_m_slice, m_new, 0.0)
-        alpha = tl.exp(m_i - m_new)
-        p = tl.exp(scores - m_new[:, None])
+        m_candidate = tl.maximum(m_i, m_ij)
+        m_new = tl.where(valid_m, m_candidate, m_i)
+        alpha = tl.exp(tl.where(valid_m, m_i - m_new, 0.0)) * valid_m_f
+        p = tl.exp(tl.where(mask_mn, scores - m_new[:, None], -float("inf"))) * mask_mn_f
         l_new = l_i * alpha + tl.sum(p, axis=1)
-        acc = acc * alpha[:, None] + tl.dot(p, v)
+        acc = acc * alpha[:, None] + tl.dot(p, v, out_dtype=tl.float32, input_precision="ieee")
         m_i = m_new
         l_i = l_new
 
     # Normalize (guard against zero)
     eps = 1e-6
-    l_safe = tl.maximum(l_i, eps)
+    l_safe = tl.maximum(tl.where(valid_m, l_i, 1.0), eps)
     acc = acc / l_safe[:, None]
-    valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
-    acc = tl.where(valid_m_slice[:, None], acc, 0.0)
+    acc = tl.where(valid_m[:, None], acc, 0.0)
 
     out_ptrs = Out + pid_bh * stride_obh + offs_m[:, None] * stride_om + offs_dv[None, :] * stride_ok
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < Tq) & (offs_dv[None, :] < Dv))
@@ -527,6 +598,13 @@ def triton_sdpa_fused(q, k, v, return_stats: bool = False):
         BLOCK_D=BLOCK_D,
         BLOCK_DV=BLOCK_DV,
     )
+    _record_triton_sdpa_fwd_debug_artifact(
+        q=q,
+        k=k,
+        m=m_stats,
+        l=l_stats,
+        scale=1.0 / (D ** 0.5),
+    )
 
     if return_stats:
         return out, m_stats, l_stats
@@ -537,6 +615,7 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v):
         out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.forward_debug_call_index = get_triton_sdpa_fwd_debug_last_call_index()
         ctx.save_for_backward(q, k, v, m, l)
         return out
 
@@ -567,6 +646,7 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
             attention uses full softmax curvature.
         """
         out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.forward_debug_call_index = get_triton_sdpa_fwd_debug_last_call_index()
         ctx.save_for_backward(q, k, v, m, l)
         ctx.scale = 1.0 / (q.shape[-1] ** 0.5)
         return out
@@ -582,6 +662,19 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
         fallback_enabled = _meta_fallback_enabled()
         profile_enabled = _meta_bwd_profile_enabled(grad_out)
         if not use_autograd_recompute:
+            debug_audit_fast_path(
+                q,
+                k,
+                v,
+                grad_out,
+                m,
+                l,
+                scale,
+                context="fast_path",
+                forward_debug_call_index=getattr(ctx, "forward_debug_call_index", -1),
+                m_dtype_read=str(m.dtype),
+                l_dtype_read=str(l.dtype),
+            )
             nonfinite_fast_input = _first_nonfinite_name(
                 (("q", q), ("k", k), ("v", v), ("m", m), ("l", l), ("grad_out", grad_out))
             )

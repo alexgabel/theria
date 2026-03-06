@@ -32,6 +32,10 @@ from theria.attention.triton_qk import (
     get_triton_meta_bwd_counters,
     reset_triton_meta_bwd_counters,
 )
+from theria.attention.triton_sdpa_backward import (
+    get_triton_sdpa_debug_counters,
+    reset_triton_sdpa_debug_counters,
+)
 from theria.maml.loops import meta_loss_on_tasks, meta_loss_on_tasks_full_frozen
 from theria.tasks.synthetic_seqcls import task_sampler
 from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
@@ -91,6 +95,7 @@ def run_behavior(
     if meta_last_n_inner > inner_steps:
         raise ValueError("meta_last_n_inner must be <= inner_steps")
     reset_triton_meta_bwd_counters()
+    reset_triton_sdpa_debug_counters()
     prev_meta_profile_env = os.environ.get("THERIA_TRITON_META_PROFILE")
     if profile_meta_bwd:
         os.environ["THERIA_TRITON_META_PROFILE"] = "1"
@@ -252,6 +257,7 @@ def run_behavior(
     mean_outer_step_time_s = wall_time_total_s / max(outer_steps, 1)
     # Capture counters for the actual training loop only; reset before optional probes.
     meta_bwd_counts = get_triton_meta_bwd_counters(reset=True)
+    sdpa_debug_counts = get_triton_sdpa_debug_counters(reset=True)
 
     # Sparse rel_diff probe (once per run): FULL vs FO on one fresh task
     rel_diff_probe_val = float("nan")
@@ -303,7 +309,9 @@ def run_behavior(
                 rel_diff_probe_val = (v_full - v_fo).norm().item() / (v_full.norm().item() + eps_probe)
         # Keep counters scoped to training path; probe calls are diagnostic only.
         reset_triton_meta_bwd_counters()
+        reset_triton_sdpa_debug_counters()
 
+    fallback_bwd_count = int(meta_bwd_counts.get("n_fallback_bwd", 0))
     row = {
         "backend": attention_backend,
         "mode": mode,
@@ -336,7 +344,9 @@ def run_behavior(
         "peak_cuda_mem_bytes": peak_cuda_mem_bytes,
         "n_fast_bwd": int(meta_bwd_counts["n_fast_bwd"]),
         "n_meta_bwd": int(meta_bwd_counts["n_meta_bwd"]),
-        "n_fallback_bwd": int(meta_bwd_counts.get("n_fallback_bwd", 0)),
+        "n_fallback_bwd": fallback_bwd_count,
+        "fallback_incident": int(fallback_bwd_count > 0),
+        "fallback_bwd_per_outer_step": float(fallback_bwd_count) / max(outer_steps, 1),
         "fast_bwd_time_s": float(meta_bwd_counts.get("fast_bwd_time_s", 0.0)),
         "meta_bwd_time_s": float(meta_bwd_counts.get("meta_bwd_time_s", 0.0)),
         "meta_recompute_time_s": float(meta_bwd_counts.get("meta_recompute_time_s", 0.0)),
@@ -353,6 +363,24 @@ def run_behavior(
             meta_bwd_counts.get("fallback_bwd_time_s", 0.0)
         )
         / max(outer_steps, 1),
+        "sdpa_debug_n_nonfinite_m": int(sdpa_debug_counts.get("n_nonfinite_m", 0)),
+        "sdpa_debug_n_nonfinite_l": int(sdpa_debug_counts.get("n_nonfinite_l", 0)),
+        "sdpa_debug_n_tiny_l": int(sdpa_debug_counts.get("n_tiny_l", 0)),
+        "sdpa_debug_n_nonfinite_p": int(sdpa_debug_counts.get("n_nonfinite_p", 0)),
+        "sdpa_debug_n_extreme_p": int(sdpa_debug_counts.get("n_extreme_p", 0)),
+        "sdpa_debug_n_nonfinite_dp": int(sdpa_debug_counts.get("n_nonfinite_dp", 0)),
+        "sdpa_debug_n_extreme_dp": int(sdpa_debug_counts.get("n_extreme_dp", 0)),
+        "sdpa_debug_n_nonfinite_ds": int(sdpa_debug_counts.get("n_nonfinite_ds", 0)),
+        "sdpa_debug_n_extreme_ds": int(sdpa_debug_counts.get("n_extreme_ds", 0)),
+        "sdpa_debug_n_nonfinite_dq": int(sdpa_debug_counts.get("n_nonfinite_dq", 0)),
+        "sdpa_debug_n_nonfinite_dk": int(sdpa_debug_counts.get("n_nonfinite_dk", 0)),
+        "sdpa_debug_n_nonfinite_dv": int(sdpa_debug_counts.get("n_nonfinite_dv", 0)),
+        "sdpa_debug_max_abs_p": float(sdpa_debug_counts.get("max_abs_p", 0.0)),
+        "sdpa_debug_max_p_row_sum_err": float(
+            sdpa_debug_counts.get("max_p_row_sum_err", 0.0)
+        ),
+        "sdpa_debug_max_abs_dp": float(sdpa_debug_counts.get("max_abs_dp", 0.0)),
+        "sdpa_debug_max_abs_ds": float(sdpa_debug_counts.get("max_abs_ds", 0.0)),
     }
     if profile_meta_bwd:
         if prev_meta_profile_env is None:
@@ -485,6 +513,8 @@ def main() -> None:
             "n_fast_bwd": 0,
             "n_meta_bwd": 0,
             "n_fallback_bwd": 0,
+            "fallback_incident": 0,
+            "fallback_bwd_per_outer_step": float("nan"),
             "fast_bwd_time_s": float("nan"),
             "meta_bwd_time_s": float("nan"),
             "meta_recompute_time_s": float("nan"),
@@ -493,6 +523,22 @@ def main() -> None:
             "meta_bwd_time_per_outer_step_s": float("nan"),
             "meta_recompute_time_per_outer_step_s": float("nan"),
             "fallback_bwd_time_per_outer_step_s": float("nan"),
+            "sdpa_debug_n_nonfinite_m": 0,
+            "sdpa_debug_n_nonfinite_l": 0,
+            "sdpa_debug_n_tiny_l": 0,
+            "sdpa_debug_n_nonfinite_p": 0,
+            "sdpa_debug_n_extreme_p": 0,
+            "sdpa_debug_n_nonfinite_dp": 0,
+            "sdpa_debug_n_extreme_dp": 0,
+            "sdpa_debug_n_nonfinite_ds": 0,
+            "sdpa_debug_n_extreme_ds": 0,
+            "sdpa_debug_n_nonfinite_dq": 0,
+            "sdpa_debug_n_nonfinite_dk": 0,
+            "sdpa_debug_n_nonfinite_dv": 0,
+            "sdpa_debug_max_abs_p": float("nan"),
+            "sdpa_debug_max_p_row_sum_err": float("nan"),
+            "sdpa_debug_max_abs_dp": float("nan"),
+            "sdpa_debug_max_abs_ds": float("nan"),
         }
         err_str = repr(e)
         if "NONFINITE" in err_str or "non_finite" in err_str:
@@ -560,6 +606,8 @@ def main() -> None:
                     "n_fast_bwd",
                     "n_meta_bwd",
                     "n_fallback_bwd",
+                    "fallback_incident",
+                    "fallback_bwd_per_outer_step",
                     "fast_bwd_time_s",
                     "meta_bwd_time_s",
                     "meta_recompute_time_s",
@@ -568,6 +616,22 @@ def main() -> None:
                     "meta_bwd_time_per_outer_step_s",
                     "meta_recompute_time_per_outer_step_s",
                     "fallback_bwd_time_per_outer_step_s",
+                    "sdpa_debug_n_nonfinite_m",
+                    "sdpa_debug_n_nonfinite_l",
+                    "sdpa_debug_n_tiny_l",
+                    "sdpa_debug_n_nonfinite_p",
+                    "sdpa_debug_n_extreme_p",
+                    "sdpa_debug_n_nonfinite_dp",
+                    "sdpa_debug_n_extreme_dp",
+                    "sdpa_debug_n_nonfinite_ds",
+                    "sdpa_debug_n_extreme_ds",
+                    "sdpa_debug_n_nonfinite_dq",
+                    "sdpa_debug_n_nonfinite_dk",
+                    "sdpa_debug_n_nonfinite_dv",
+                    "sdpa_debug_max_abs_p",
+                    "sdpa_debug_max_p_row_sum_err",
+                    "sdpa_debug_max_abs_dp",
+                    "sdpa_debug_max_abs_ds",
                     "status",
                     "error",
                     "convergence_delta",

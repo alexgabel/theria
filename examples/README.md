@@ -11,9 +11,9 @@ A one-stop notebook demo for Phase-12 MAML second-order workflows.
 **What it demonstrates:**
 - Stable baseline usage (`triton_fused_meta_strict`):
   - correctness mode: `FULL`
-  - practical mode: `FULL_HYBRID --meta-every-n-outer 8`
+  - practical mode: `FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
 - How to run the default gate+frontier benchmark flow.
-- How to run/inspect a short diffusion-like stability isolate.
+- How to run/inspect the deterministic fused-meta canary.
 - Clear split between current deliverables and future work.
 
 Open in VSCode/Jupyter:

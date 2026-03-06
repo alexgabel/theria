@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
+if [[ "${ALLOW_LEGACY_PHASE12_PIPELINE:-0}" != "1" ]]; then
+  echo "run_phase12_pipeline.sh is a legacy Phase-12 script and is disabled by default."
+  echo "It still benchmarks triton_fused, which is no longer part of the current frontier."
+  echo "Use experiments/phase12/scripts/run_phase12_maml_gate_and_frontier.sh instead."
+  echo "If you intentionally need the legacy script, rerun with ALLOW_LEGACY_PHASE12_PIPELINE=1."
+  exit 2
+fi
+
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 OUTER_STEPS="${OUTER_STEPS:-500}"
 META_BATCH_SIZE="${META_BATCH_SIZE:-16}"

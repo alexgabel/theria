@@ -232,6 +232,8 @@ def main() -> None:
         "n_fast_bwd",
         "n_meta_bwd",
         "n_fallback_bwd",
+        "fallback_incident",
+        "fallback_bwd_per_outer_step",
         "fast_bwd_time_s",
         "meta_bwd_time_s",
         "meta_recompute_time_s",
@@ -240,6 +242,22 @@ def main() -> None:
         "meta_bwd_time_per_outer_step_s",
         "meta_recompute_time_per_outer_step_s",
         "fallback_bwd_time_per_outer_step_s",
+        "sdpa_debug_n_nonfinite_m",
+        "sdpa_debug_n_nonfinite_l",
+        "sdpa_debug_n_tiny_l",
+        "sdpa_debug_n_nonfinite_p",
+        "sdpa_debug_n_extreme_p",
+        "sdpa_debug_n_nonfinite_dp",
+        "sdpa_debug_n_extreme_dp",
+        "sdpa_debug_n_nonfinite_ds",
+        "sdpa_debug_n_extreme_ds",
+        "sdpa_debug_n_nonfinite_dq",
+        "sdpa_debug_n_nonfinite_dk",
+        "sdpa_debug_n_nonfinite_dv",
+        "sdpa_debug_max_abs_p",
+        "sdpa_debug_max_p_row_sum_err",
+        "sdpa_debug_max_abs_dp",
+        "sdpa_debug_max_abs_ds",
         "status",
         "error",
         "convergence_delta",
@@ -388,6 +406,8 @@ def main() -> None:
                                 "n_fast_bwd": 0,
                                 "n_meta_bwd": 0,
                                 "n_fallback_bwd": 0,
+                                "fallback_incident": 0,
+                                "fallback_bwd_per_outer_step": float("nan"),
                                 "fast_bwd_time_s": float("nan"),
                                 "meta_bwd_time_s": float("nan"),
                                 "meta_recompute_time_s": float("nan"),
@@ -396,6 +416,22 @@ def main() -> None:
                                 "meta_bwd_time_per_outer_step_s": float("nan"),
                                 "meta_recompute_time_per_outer_step_s": float("nan"),
                                 "fallback_bwd_time_per_outer_step_s": float("nan"),
+                                "sdpa_debug_n_nonfinite_m": 0,
+                                "sdpa_debug_n_nonfinite_l": 0,
+                                "sdpa_debug_n_tiny_l": 0,
+                                "sdpa_debug_n_nonfinite_p": 0,
+                                "sdpa_debug_n_extreme_p": 0,
+                                "sdpa_debug_n_nonfinite_dp": 0,
+                                "sdpa_debug_n_extreme_dp": 0,
+                                "sdpa_debug_n_nonfinite_ds": 0,
+                                "sdpa_debug_n_extreme_ds": 0,
+                                "sdpa_debug_n_nonfinite_dq": 0,
+                                "sdpa_debug_n_nonfinite_dk": 0,
+                                "sdpa_debug_n_nonfinite_dv": 0,
+                                "sdpa_debug_max_abs_p": float("nan"),
+                                "sdpa_debug_max_p_row_sum_err": float("nan"),
+                                "sdpa_debug_max_abs_dp": float("nan"),
+                                "sdpa_debug_max_abs_ds": float("nan"),
                             }
                             err_str = repr(e)
                             if "NONFINITE" in err_str or "non_finite" in err_str:
@@ -488,6 +524,10 @@ def main() -> None:
                     "n_meta_bwd_std",
                     "n_fallback_bwd_mean",
                     "n_fallback_bwd_std",
+                    "fallback_incident_mean",
+                    "fallback_incident_std",
+                    "fallback_bwd_per_outer_step_mean",
+                    "fallback_bwd_per_outer_step_std",
                     "fast_bwd_time_per_outer_step_s_mean",
                     "fast_bwd_time_per_outer_step_s_std",
                     "meta_bwd_time_per_outer_step_s_mean",
@@ -523,6 +563,16 @@ def main() -> None:
                 ]
                 n_fallback_bwd_vals = [
                     float(x["n_fallback_bwd"]) for x in items if str(x.get("status")) == "OK"
+                ]
+                fallback_incident_vals = [
+                    float(x.get("fallback_incident", 0))
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                fallback_rate_vals = [
+                    float(x.get("fallback_bwd_per_outer_step", float("nan")))
+                    for x in items
+                    if str(x.get("status")) == "OK"
                 ]
                 outer_steps_vals = [
                     float(x["outer_steps"]) for x in items if str(x.get("status")) == "OK"
@@ -588,6 +638,10 @@ def main() -> None:
                         _std(n_meta_bwd_vals),
                         _mean(n_fallback_bwd_vals),
                         _std(n_fallback_bwd_vals),
+                        _mean(fallback_incident_vals),
+                        _std(fallback_incident_vals),
+                        _mean(fallback_rate_vals),
+                        _std(fallback_rate_vals),
                         _mean(fast_bwd_time_step_vals),
                         _std(fast_bwd_time_step_vals),
                         _mean(meta_bwd_time_step_vals),

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,13 @@ from experiments.phase10.scripts.run_maml_backend_compare import (
 )
 from theria.attention.triton_qk import (
     get_triton_meta_bwd_counters,
+    get_triton_sdpa_fwd_debug_artifact,
     reset_triton_meta_bwd_counters,
+    reset_triton_sdpa_fwd_debug_artifacts,
+)
+from theria.attention.triton_sdpa_backward import (
+    get_triton_sdpa_debug_artifact,
+    reset_triton_sdpa_debug_artifact,
 )
 from theria.maml.loops import meta_loss_on_tasks
 from theria.tasks.synthetic_seqcls import task_sampler
@@ -258,6 +265,7 @@ def _run_one_step(
 
     out = {
         "status": status,
+        "failure_stage": _classify_failure_stage(error),
         "error": error,
         "final_loss": final_loss,
         "final_acc": final_acc,
@@ -282,6 +290,291 @@ def _abs_diff(a: float | int | str, b: float | int | str) -> float:
     return abs(af - bf)
 
 
+def _classify_failure_stage(error: str) -> str:
+    if not error:
+        return "none"
+    if (
+        "fast_input[" in error
+        or "fast_grad[" in error
+        or "in_triton_fused_meta" in error
+        or "context=fast_path" in error
+        or "context=output[dq]" in error
+        or "context=output[dk]" in error
+        or "context=output[dv]" in error
+    ):
+        return "fast_backward"
+    if (
+        "in_meta_recompute" in error
+        or "fallback_input[" in error
+        or "fallback_recompute[" in error
+        or "fallback_grad[" in error
+    ):
+        return "recompute"
+    if (
+        "support_logits" in error
+        or "support_loss" in error
+        or "support_grad[" in error
+        or "query_logits" in error
+        or "query_loss" in error
+        or "query_acc" in error
+        or "outer_loss" in error
+        or "grad[" in error
+    ):
+        return "outer_model_grad"
+    return "other"
+
+
+def _classify_row_root_cause(
+    *,
+    delta_m: float,
+    delta_l_rel: float,
+    row_sum_err_fused: float,
+    m_abs_tol: float,
+    l_rel_tol: float,
+    row_sum_err_tol: float,
+) -> str:
+    if abs(delta_m) > m_abs_tol:
+        return "m_mismatch"
+    if delta_l_rel > l_rel_tol:
+        return "l_mismatch"
+    if row_sum_err_fused > row_sum_err_tol:
+        return "reconstruction_precision"
+    return "mixed"
+
+
+def _python_online_softmax_trace(
+    scores_ref: torch.Tensor,
+    *,
+    block_n: int,
+) -> tuple[list[dict[str, float | int]], float, float]:
+    scores_ref = scores_ref.detach().float()
+    final_m_ref = float(scores_ref.max().item())
+    final_shifted = scores_ref - final_m_ref
+    final_l_ref = float(torch.exp(final_shifted).sum().item())
+    running_m = float("-inf")
+    running_l = 0.0
+    trace_rows: list[dict[str, float | int]] = []
+    for block_rank, block_start in enumerate(range(0, int(scores_ref.numel()), block_n)):
+        block_end = min(block_start + block_n, int(scores_ref.numel()))
+        block_scores = scores_ref[block_start:block_end]
+        block_max = float(block_scores.max().item())
+        if math.isinf(running_m) and running_m < 0:
+            running_m_new = block_max
+            alpha = 0.0
+        else:
+            running_m_new = max(running_m, block_max)
+            alpha = math.exp(running_m - running_m_new)
+        block_exp = torch.exp(block_scores - running_m_new)
+        running_l = running_l * alpha + float(block_exp.sum().item())
+        running_m = running_m_new
+
+        prefix_scores = scores_ref[:block_end]
+        prefix_m_ref = float(prefix_scores.max().item())
+        prefix_l_ref = float(torch.exp(prefix_scores - prefix_m_ref).sum().item())
+        delta_m_prefix = running_m - prefix_m_ref
+        delta_l_prefix = running_l - prefix_l_ref
+        delta_l_prefix_rel = abs(delta_l_prefix) / max(abs(prefix_l_ref), 1e-12)
+        trace_rows.append(
+            {
+                "block_rank": block_rank,
+                "block_start": block_start,
+                "block_end": block_end,
+                "block_max_ref": block_max,
+                "running_m_py": running_m,
+                "prefix_m_ref": prefix_m_ref,
+                "delta_m_prefix": delta_m_prefix,
+                "running_l_py": running_l,
+                "prefix_l_ref": prefix_l_ref,
+                "delta_l_prefix": delta_l_prefix,
+                "delta_l_prefix_rel": delta_l_prefix_rel,
+                "final_m_ref": final_m_ref,
+                "final_l_ref": final_l_ref,
+            }
+        )
+    return trace_rows, running_m, running_l
+
+
+def _reference_row_debug_entries(
+    *,
+    artifact: dict[str, object],
+    seed: int,
+    mode: str,
+    outer_step: int,
+    fused_backend: str,
+    strict_backend: str,
+    failure_stage: str,
+    failure_reason: str,
+    m_abs_tol: float,
+    l_rel_tol: float,
+    row_sum_err_tol: float,
+    block_n: int,
+) -> tuple[list[dict[str, float | int | str]], list[dict[str, float | int | str]]]:
+    q = artifact["q"].float()
+    k = artifact["k"].float()
+    scale = float(artifact["scale"])
+    forward_debug_call_index = int(artifact.get("forward_debug_call_index", -1))
+    forward_artifact = (
+        get_triton_sdpa_fwd_debug_artifact(call_index=forward_debug_call_index)
+        if forward_debug_call_index >= 0
+        else {}
+    )
+    m_write_all = forward_artifact.get("m")
+    l_write_all = forward_artifact.get("l")
+    m_dtype_write = str(forward_artifact.get("m_dtype_write", ""))
+    l_dtype_write = str(forward_artifact.get("l_dtype_write", ""))
+    m_dtype_read = str(artifact.get("m_dtype_read", ""))
+    l_dtype_read = str(artifact.get("l_dtype_read", ""))
+    rows = artifact.get("rows", [])
+    out: list[dict[str, float | int | str]] = []
+    trace_out: list[dict[str, float | int | str]] = []
+    for row in rows:
+        b_idx = int(row["batch_idx"])
+        h_idx = int(row["head_idx"])
+        t_idx = int(row["query_row_idx"])
+        scores_ref = torch.matmul(q[b_idx, h_idx, t_idx], k[b_idx, h_idx].transpose(-2, -1)) * scale
+        m_ref = float(scores_ref.max().item())
+        shifted = scores_ref - m_ref
+        exp_shifted = torch.exp(shifted)
+        l_ref = float(exp_shifted.sum().item())
+        p_ref = exp_shifted / max(l_ref, 1e-12)
+        m_fused = float(row["m_fused"])
+        l_fused = float(row["l_fused"])
+        p_fused_from_saved = torch.exp(scores_ref - m_fused) / max(l_fused, 1e-12)
+        row_sum_ref = float(p_ref.sum().item())
+        row_sum_err_ref = abs(row_sum_ref - 1.0)
+        trace_rows, m_py_blockwise, l_py_blockwise = _python_online_softmax_trace(
+            scores_ref,
+            block_n=block_n,
+        )
+        delta_m = m_fused - m_ref
+        delta_l = l_fused - l_ref
+        delta_l_rel = abs(delta_l) / max(abs(l_ref), 1e-12)
+        delta_m_py_blockwise = m_py_blockwise - m_ref
+        delta_l_py_blockwise = l_py_blockwise - l_ref
+        delta_l_py_blockwise_rel = abs(delta_l_py_blockwise) / max(abs(l_ref), 1e-12)
+        forward_oracle_guess = (
+            "recurrence_matches_exact"
+            if abs(delta_m_py_blockwise) <= 1e-6 and delta_l_py_blockwise_rel <= 1e-6
+            else "recurrence_mismatch"
+        )
+        if isinstance(m_write_all, torch.Tensor):
+            m_write = float(m_write_all[b_idx, h_idx, t_idx].item())
+        else:
+            m_write = float("nan")
+        if isinstance(l_write_all, torch.Tensor):
+            l_write = float(l_write_all[b_idx, h_idx, t_idx].item())
+        else:
+            l_write = float("nan")
+        delta_m_write = m_write - m_ref if math.isfinite(m_write) else float("nan")
+        delta_l_write = l_write - l_ref if math.isfinite(l_write) else float("nan")
+        delta_l_write_rel = (
+            abs(delta_l_write) / max(abs(l_ref), 1e-12)
+            if math.isfinite(delta_l_write)
+            else float("nan")
+        )
+        m_write_read_abs_diff = (
+            abs(m_write - m_fused) if math.isfinite(m_write) else float("nan")
+        )
+        l_write_read_abs_diff = (
+            abs(l_write - l_fused) if math.isfinite(l_write) else float("nan")
+        )
+        row_sum_fused = float(row["row_sum_fused"])
+        row_sum_err_fused = float(row["row_sum_err_fused"])
+        root_cause_guess = _classify_row_root_cause(
+            delta_m=delta_m,
+            delta_l_rel=delta_l_rel,
+            row_sum_err_fused=row_sum_err_fused,
+            m_abs_tol=m_abs_tol,
+            l_rel_tol=l_rel_tol,
+            row_sum_err_tol=row_sum_err_tol,
+        )
+        out.append(
+            {
+                "seed": seed,
+                "mode": mode,
+                "outer_step": outer_step,
+                "fused_backend": fused_backend,
+                "strict_backend": strict_backend,
+                "failure_stage": failure_stage,
+                "failure_reason": failure_reason,
+                "failure_context": str(artifact.get("context", "")),
+                "audit_call_index": int(artifact.get("audit_call_index", 0)),
+                "failing_row_rank": int(row["failing_row_rank"]),
+                "batch_idx": b_idx,
+                "head_idx": h_idx,
+                "query_row_idx": t_idx,
+                "key_len": int(scores_ref.shape[-1]),
+                "scale": scale,
+                "score_min_ref": float(scores_ref.min().item()),
+                "score_max_ref": float(scores_ref.max().item()),
+                "m_fused": m_fused,
+                "m_ref": m_ref,
+                "delta_m": delta_m,
+                "l_fused": l_fused,
+                "l_ref": l_ref,
+                "delta_l": delta_l,
+                "delta_l_rel": delta_l_rel,
+                "row_sum_fused": row_sum_fused,
+                "row_sum_err_fused": row_sum_err_fused,
+                "row_sum_ref": row_sum_ref,
+                "row_sum_err_ref": row_sum_err_ref,
+                "p_min_fused": float(row["p_min_fused"]),
+                "p_max_fused": float(row["p_max_fused"]),
+                "p_min_ref": float(p_ref.min().item()),
+                "p_max_ref": float(p_ref.max().item()),
+                "root_cause_guess": root_cause_guess,
+                "n_negative_p_fused": int(float(row.get("n_negative_p_fused", 0))),
+                "n_p_gt_1_fused": int(float(row.get("n_p_gt_1_fused", 0))),
+                "forward_debug_call_index": forward_debug_call_index,
+                "m_dtype_write": m_dtype_write,
+                "m_dtype_read": m_dtype_read,
+                "l_dtype_write": l_dtype_write,
+                "l_dtype_read": l_dtype_read,
+                "m_write": m_write,
+                "delta_m_write": delta_m_write,
+                "l_write": l_write,
+                "delta_l_write": delta_l_write,
+                "delta_l_write_rel": delta_l_write_rel,
+                "m_write_read_abs_diff": m_write_read_abs_diff,
+                "l_write_read_abs_diff": l_write_read_abs_diff,
+                "m_py_blockwise": m_py_blockwise,
+                "delta_m_py_blockwise": delta_m_py_blockwise,
+                "l_py_blockwise": l_py_blockwise,
+                "delta_l_py_blockwise": delta_l_py_blockwise,
+                "delta_l_py_blockwise_rel": delta_l_py_blockwise_rel,
+                "forward_oracle_guess": forward_oracle_guess,
+            }
+        )
+        for trace in trace_rows:
+            trace_out.append(
+                {
+                    "seed": seed,
+                    "mode": mode,
+                    "outer_step": outer_step,
+                    "fused_backend": fused_backend,
+                    "strict_backend": strict_backend,
+                    "failure_stage": failure_stage,
+                    "failure_reason": failure_reason,
+                    "failing_row_rank": int(row["failing_row_rank"]),
+                    "batch_idx": b_idx,
+                    "head_idx": h_idx,
+                    "query_row_idx": t_idx,
+                    **trace,
+                }
+            )
+    return out, trace_out
+
+
+def _top_row_root_cause(row_debug_rows: list[dict[str, float | int | str]]) -> str:
+    if not row_debug_rows:
+        return ""
+    counts: dict[str, int] = {}
+    for row in row_debug_rows:
+        key = str(row.get("root_cause_guess", ""))
+        counts[key] = counts.get(key, 0) + 1
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fused-backend", type=str, default="triton_fused_meta")
@@ -304,8 +597,21 @@ def main() -> None:
         default=1e-3,
         help="Absolute tolerance for loss/grad stat diffs before declaring divergence.",
     )
+    parser.add_argument("--m-abs-tol", type=float, default=1e-5)
+    parser.add_argument("--l-rel-tol", type=float, default=1e-4)
+    parser.add_argument("--row-sum-err-tol", type=float, default=1e-3)
+    parser.add_argument(
+        "--fail-on-divergence",
+        action="store_true",
+        help="Exit non-zero when a first divergence is detected.",
+    )
     parser.add_argument("--csv-out", type=str, default=None)
+    parser.add_argument("--summary-out", type=str, default=None)
+    parser.add_argument("--row-debug-csv-out", type=str, default=None)
+    parser.add_argument("--forward-trace-csv-out", type=str, default=None)
     args = parser.parse_args()
+    if args.row_debug_csv_out and "THERIA_TRITON_FWD_DEBUG" not in os.environ:
+        os.environ["THERIA_TRITON_FWD_DEBUG"] = "1"
 
     device = torch.device(args.device)
     torch.manual_seed(args.seed)
@@ -336,6 +642,12 @@ def main() -> None:
 
     rows: list[dict[str, float | int | str]] = []
     first_divergence_step = None
+    divergence_reason = "none"
+    divergence_row: dict[str, float | int | str] | None = None
+    row_debug_rows: list[dict[str, float | int | str]] = []
+    forward_trace_rows: list[dict[str, float | int | str]] = []
+    reset_triton_sdpa_debug_artifact()
+    reset_triton_sdpa_fwd_debug_artifacts()
 
     for step_idx in range(args.outer_steps):
         tasks = _sample_tasks(
@@ -428,6 +740,30 @@ def main() -> None:
                 )
         if diverged:
             first_divergence_step = step_idx
+            divergence_reason = reason
+            divergence_row = dict(step_row)
+            artifact = get_triton_sdpa_debug_artifact(reset=True)
+            fused_failure_stage = str(fused_row.get("failure_stage", ""))
+            fused_error = str(fused_row.get("error", ""))
+            if (
+                artifact
+                and str(artifact.get("context", "")) == "fast_path"
+                and "row_sum_err" in fused_error
+            ):
+                row_debug_rows, forward_trace_rows = _reference_row_debug_entries(
+                    artifact=artifact,
+                    seed=args.seed,
+                    mode=args.mode,
+                    outer_step=step_idx,
+                    fused_backend=args.fused_backend,
+                    strict_backend=args.strict_backend,
+                    failure_stage=fused_failure_stage,
+                    failure_reason=fused_error,
+                    m_abs_tol=args.m_abs_tol,
+                    l_rel_tol=args.l_rel_tol,
+                    row_sum_err_tol=args.row_sum_err_tol,
+                    block_n=64,
+                )
             print(f"first_divergence_step={step_idx} reason={reason}")
             print(f"fused_error={fused_row.get('error','')}")
             print(f"strict_error={strict_row.get('error','')}")
@@ -435,6 +771,9 @@ def main() -> None:
 
     probe_fused.detach()
     probe_strict.detach()
+
+    diag_row = divergence_row if divergence_row is not None else (rows[-1] if rows else None)
+    diag_source = "first_divergence" if divergence_row is not None else "final_step"
 
     if args.csv_out:
         out_path = Path(args.csv_out)
@@ -445,10 +784,157 @@ def main() -> None:
             w.writerows(rows)
         print(f"wrote {out_path}")
 
+    if args.row_debug_csv_out and row_debug_rows:
+        row_debug_path = Path(args.row_debug_csv_out)
+        row_debug_path.parent.mkdir(parents=True, exist_ok=True)
+        row_debug_fieldnames = [
+            "seed",
+            "mode",
+            "outer_step",
+            "fused_backend",
+            "strict_backend",
+            "failure_stage",
+            "failure_reason",
+            "failure_context",
+            "audit_call_index",
+            "failing_row_rank",
+            "batch_idx",
+            "head_idx",
+            "query_row_idx",
+            "key_len",
+            "scale",
+            "score_min_ref",
+            "score_max_ref",
+            "m_fused",
+            "m_ref",
+            "delta_m",
+            "l_fused",
+            "l_ref",
+            "delta_l",
+            "delta_l_rel",
+            "row_sum_fused",
+            "row_sum_err_fused",
+            "row_sum_ref",
+            "row_sum_err_ref",
+            "p_min_fused",
+            "p_max_fused",
+            "p_min_ref",
+            "p_max_ref",
+            "root_cause_guess",
+            "n_negative_p_fused",
+            "n_p_gt_1_fused",
+            "forward_debug_call_index",
+            "m_dtype_write",
+            "m_dtype_read",
+            "l_dtype_write",
+            "l_dtype_read",
+            "m_write",
+            "delta_m_write",
+            "l_write",
+            "delta_l_write",
+            "delta_l_write_rel",
+            "m_write_read_abs_diff",
+            "l_write_read_abs_diff",
+            "m_py_blockwise",
+            "delta_m_py_blockwise",
+            "l_py_blockwise",
+            "delta_l_py_blockwise",
+            "delta_l_py_blockwise_rel",
+            "forward_oracle_guess",
+        ]
+        with row_debug_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=row_debug_fieldnames)
+            w.writeheader()
+            w.writerows(row_debug_rows)
+        print(f"wrote {row_debug_path}")
+
+    if args.forward_trace_csv_out and forward_trace_rows:
+        trace_path = Path(args.forward_trace_csv_out)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_fieldnames = [
+            "seed",
+            "mode",
+            "outer_step",
+            "fused_backend",
+            "strict_backend",
+            "failure_stage",
+            "failure_reason",
+            "failing_row_rank",
+            "batch_idx",
+            "head_idx",
+            "query_row_idx",
+            "block_rank",
+            "block_start",
+            "block_end",
+            "block_max_ref",
+            "running_m_py",
+            "prefix_m_ref",
+            "delta_m_prefix",
+            "running_l_py",
+            "prefix_l_ref",
+            "delta_l_prefix",
+            "delta_l_prefix_rel",
+            "final_m_ref",
+            "final_l_ref",
+        ]
+        with trace_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=trace_fieldnames)
+            w.writeheader()
+            w.writerows(forward_trace_rows)
+        print(f"wrote {trace_path}")
+
+    if args.summary_out:
+        summary_path = Path(args.summary_out)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        row_debug_root_cause_top1 = _top_row_root_cause(row_debug_rows)
+        summary_row: dict[str, float | int | str] = {
+            "seed": args.seed,
+            "fused_backend": args.fused_backend,
+            "strict_backend": args.strict_backend,
+            "mode": args.mode,
+            "outer_steps_requested": args.outer_steps,
+            "outer_steps_completed": len(rows),
+            "meta_batch_size": args.meta_batch_size,
+            "inner_steps": args.inner_steps,
+            "inner_lr": args.inner_lr,
+            "outer_lr": args.outer_lr,
+            "meta_every_n_outer": args.meta_every_n_outer,
+            "meta_last_n_inner": args.meta_last_n_inner,
+            "seq_len": args.seq_len,
+            "num_signal_positions": args.num_signal_positions,
+            "device": args.device,
+            "divergence_tol": args.divergence_tol,
+            "divergence_detected": int(first_divergence_step is not None),
+            "first_divergence_step": (
+                first_divergence_step if first_divergence_step is not None else -1
+            ),
+            "divergence_reason": divergence_reason,
+            "diagnostics_source": diag_source,
+            "diagnostics_step": (
+                diag_row["outer_step"] if diag_row is not None else -1
+            ),
+            "row_debug_csv": args.row_debug_csv_out or "",
+            "n_row_debug_rows": len(row_debug_rows),
+            "row_debug_root_cause_top1": row_debug_root_cause_top1,
+            "forward_trace_csv": args.forward_trace_csv_out or "",
+            "n_forward_trace_rows": len(forward_trace_rows),
+        }
+        if diag_row is not None:
+            for key, val in diag_row.items():
+                if key == "outer_step":
+                    continue
+                summary_row[str(key)] = val
+        with summary_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(summary_row.keys()))
+            w.writeheader()
+            w.writerow(summary_row)
+        print(f"wrote {summary_path}")
+
     if first_divergence_step is None:
         print("no divergence detected within outer_steps")
+    elif args.fail_on_divergence:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
     main()
-

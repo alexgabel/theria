@@ -1,65 +1,119 @@
-# Phase 12 — Operator Sensitivity: Signal -> Behavior
+# Phase 12 — Current Contract
 
-Phase 12 asks whether attention-level second-order signal translates into measurable meta-learning behavior.
+Phase 12 is now the benchmark and productization layer for second-order MAML
+attention backends.
 
-## Scope (frozen)
-- Modes: `FULL`, `FO`, `FO_STRICT`
-- Backends: `reference`, `triton_fused`
-- Inner steps: `{1,5,10,20}` (long confirmation run uses `{10,20}`)
-- Seeds: `{0,1}`
-- Meta-batch: `16`
-- Inner LR: `0.4`
-- Outer optimizer/LR: Adam / `1e-3`
+## Frozen product baselines
 
-## Repro
-Run the full pipeline:
+- Stable correctness baseline:
+  - backend: `triton_fused_meta_strict`
+  - mode: `FULL`
+- Stable practical baseline:
+  - backend: `triton_fused_meta_strict`
+  - mode: `FULL_HYBRID`
+  - knobs: `--meta-every-n-outer 8 --meta-last-n-inner 2`
+- Experimental backend only:
+  - backend: `triton_fused_meta`
+
+`triton_fused` is removed from current frontier recommendations until its
+non-finite issue is fixed. It is not a valid deployment frontier backend.
+
+## Mandatory gate policy
+
+Before every performance change:
+- run the meta-contract gate
+- require cosine thresholds to remain unchanged
+- require rel-diff error to remain unchanged
+- require no qualitative trend mismatch
+
+The default entrypoint already enforces this ordering:
 
 ```bash
-bash experiments/phase12/scripts/run_phase12_pipeline.sh
+bash experiments/phase12/scripts/run_phase12_maml_gate_and_frontier.sh
 ```
 
-Long confirmation run (k=10/20, 1000 outer steps):
+## Current recommended runs
+
+Stable baseline frontier:
 
 ```bash
-RUN_TAG=phase12_long_k10k20 \
-OUTER_STEPS=1000 \
-INNER_STEPS_LIST="10 20" \
-SEEDS="0 1" \
-bash experiments/phase12/scripts/run_phase12_pipeline.sh
+TAG=phase12_frontier_$(date +%Y%m%d_%H%M%S) \
+BACKENDS=triton_fused_meta_strict \
+MODES=FULL,FULL_HYBRID \
+META_EVERY_N_OUTER=8 \
+bash experiments/phase12/scripts/run_phase12_maml_gate_and_frontier.sh
 ```
 
-## Canonical outputs (long run)
-- Combined runs: `experiments/phase12/runs/phase12_all_phase12_long_k10k20.csv`
-- Aggregated summary: `experiments/phase12/runs/phase12_summary_phase12_long_k10k20.csv`
-- Risk checks: `experiments/phase12/runs/phase12_risk_checks_phase12_long_k10k20.csv`
-- Accuracy plot: `experiments/phase12/figures/phase12_acc_vs_inner_steps_phase12_long_k10k20.png`
-- Attention-grad plot: `experiments/phase12/figures/phase12_attn_grad_norm_vs_inner_steps_phase12_long_k10k20.png`
+Practical stable frontier with the frozen hybrid knob:
 
-## Results (long run, mean over 2 seeds)
-### Reference backend
-- `k=10`: FULL acc `0.9385`, FO acc `0.9350` (FULL +0.0035)
-- `k=20`: FULL acc `0.9389`, FO acc `0.9408` (FO +0.0020)
+```bash
+TAG=phase12_frontier_hybrid_$(date +%Y%m%d_%H%M%S) \
+BACKENDS=triton_fused_meta_strict \
+MODES=FULL_HYBRID \
+META_EVERY_N_OUTER=8 \
+META_LAST_N_INNER=2 \
+bash experiments/phase12/scripts/run_phase12_maml_gate_and_frontier.sh
+```
 
-### Triton fused backend
-- `k=10`: FULL acc `0.9343`, FO acc `0.9329` (FULL +0.0014)
-- `k=20`: FULL acc `0.9411`, FO acc `0.9408` (FULL +0.0003)
+## Primary instability canary
 
-### FO_STRICT status
-- `FO_STRICT` currently hard-fails in this setup (`HARD_FAIL_OTHER`, tensors without `grad_fn`) for both backends.
-- It is treated as an unsupported mode in current loop wiring, not a behavioral baseline.
+The canonical canary is the known bad diffusion-like config, run without
+runtime fallback:
 
-## Interpretation
-- FULL and FO are very close in this task regime at high inner depth; differences are small and backend-consistent.
-- Triton-backed behavior tracks reference closely, with no large behavioral drift.
-- Attention grad norms remain nonzero; FULL does not show a large stable advantage over FO in this specific setup.
+```bash
+bash experiments/phase12/scripts/run_phase12_fused_meta_canary.sh
+```
 
-## Risk checks
-From `phase12_risk_checks_phase12_long_k10k20.csv`:
-- Seed determinism check: `PASS` (CPU reference FULL k=5 exact repeat)
-- Reference vs Triton forward parity: `WARN`, but tiny drift (`max_abs_err=2.29e-4`, `rel_err=7.15e-4`)
+This script fixes:
+- `CUBLAS_WORKSPACE_CONFIG=:4096:8`
+- `THERIA_TRITON_META_ENABLE_FALLBACK=0`
+- seeds `1 4`
+- diffusion-like config: `seq_len=128`, `num_signal_positions=12`, `k=10`
+- CSV output paths under `experiments/phase12/runs/`
 
-## Close-out notes
-Before fully closing Phase 12:
-1. Decide FO_STRICT policy (fix to run, or formally exclude from primary comparisons).
-2. Keep long-run artifacts above as canonical for citations.
-3. Mirror key numbers in `docs/STATUS.md`.
+The canary must pass before `triton_fused_meta` is considered for speed claims.
+
+## Owned instability regression target
+
+Use the fixed bad-seed regression target when making numerical changes to
+`triton_fused_meta`:
+
+```bash
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_fused_meta_regression.py \
+  --expect-fused-meta fail
+```
+
+Before the fix, the known bad seeds must fail/diverge for `triton_fused_meta`.
+After the fix, rerun the same target with:
+
+```bash
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_fused_meta_regression.py \
+  --expect-fused-meta pass
+```
+
+The strict backend must remain clean throughout in both modes.
+
+## Standard debug artifact
+
+The first-divergence tracer now writes both:
+- a per-step CSV via `--csv-out`
+- a one-row first-divergence summary via `--summary-out`
+
+The summary artifact captures:
+- outer step index
+- divergence reason
+- logits / softmax stats
+- dQ / dK / dV stats
+- q / k / v projection gradient stats
+- failure stage classification:
+  - `fast_backward`
+  - `recompute`
+  - `outer_model_grad`
+
+## Notes
+
+- Use `triton_fused_meta_strict FULL` when correctness is the priority.
+- Use `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+  when wall-clock matters.
+- Use `triton_fused_meta` only with explicit opt-in while stabilization work is
+  ongoing.

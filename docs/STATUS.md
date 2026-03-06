@@ -8,6 +8,24 @@
 
 Phase 11 — Failure modes & safety boundaries
 
+## Current product baselines
+
+- Stable correctness baseline:
+  - `triton_fused_meta_strict FULL`
+- Stable practical baseline:
+  - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- Experimental backend only:
+  - `triton_fused_meta`
+
+Current policy:
+- Meta-contract gate is mandatory before every performance change.
+- `triton_fused` is not part of the current frontier until its non-finite issue
+  is fixed.
+- The primary instability canary is
+  `experiments/phase12/scripts/run_phase12_fused_meta_canary.sh`.
+- The owned instability regression target is
+  `experiments/phase12/scripts/run_phase12_fused_meta_regression.py`.
+
 ## High-level summary (for new users)
 
 This project builds a fully explicit SDPA (scaled dot-product attention) operator with:

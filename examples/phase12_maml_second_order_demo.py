@@ -16,7 +16,7 @@
 # ## Deliverables (current state)
 # - Stable correctness backend: `triton_fused_meta_strict` in `FULL`.
 # - Stable practical backend: `triton_fused_meta_strict` in `FULL_HYBRID`
-#   with `meta_every_n_outer=8`.
+#   with `meta_every_n_outer=8` and `meta_last_n_inner=2`.
 # - Non-finite failure handling is enabled in frontier runs.
 # - Meta-contract gate + frontier scripts are available as default entrypoints.
 #
@@ -133,7 +133,7 @@ print("Python:", sys.executable)
 # Defaults are already pinned to strict baseline:
 # - backend: `triton_fused_meta_strict`
 # - modes: `FULL,FULL_HYBRID`
-# - practical setting: `meta_every_n_outer=8`
+# - practical setting: `meta_every_n_outer=8`, `meta_last_n_inner=2`
 
 # %%
 RUN_BASELINE = False
@@ -148,6 +148,7 @@ if RUN_BASELINE:
             "INNER_STEPS": "2,5,10",
             "SEEDS": "0,1,2,3,4",
             "META_EVERY_N_OUTER": "8",
+            "META_LAST_N_INNER": "2",
             "FULL_OUTER_LR": "1e-3",
             "FULL_HYBRID_OUTER_LR": "1e-3",
         },
@@ -174,53 +175,39 @@ else:
 
 
 # %% [markdown]
-# ## 4) Diffusion-like stability isolate (strict vs experimental)
-# This is the shortest sanity check to separate:
-# - stable strict path (`triton_fused_meta_strict`)
-# - experimental fused path (`triton_fused_meta`)
-#
-# `triton_fused_meta` is blocked by default, so we explicitly opt in.
+# ## 4) Diffusion-like fused-meta canary
+# This is the primary instability canary for the experimental fused meta path.
+# It runs the known bad diffusion-like config with:
+# - fixed `CUBLAS_WORKSPACE_CONFIG`
+# - `THERIA_TRITON_META_ENABLE_FALLBACK=0`
+# - fixed failing seeds
+# and fails if fused-meta diverges from strict.
 
 # %%
-RUN_STABILITY_ISOLATE = False
-isolate_tag = f"phase12_stability_isolate_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-isolate_csv = RUNS_DIR / f"{isolate_tag}.csv"
-isolate_summary = RUNS_DIR / f"{isolate_tag}_summary.csv"
+RUN_FUSED_META_CANARY = False
+canary_tag = f"phase12_fused_meta_canary_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-if RUN_STABILITY_ISOLATE:
+if RUN_FUSED_META_CANARY:
     run_cmd(
-        " ".join(
-            [
-                "PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.py",
-                "--backends triton_fused_meta_strict,triton_fused_meta",
-                "--modes FULL",
-                "--inner-steps 10",
-                "--seeds 0,1",
-                "--outer-steps 60",
-                "--meta-batch-size 8",
-                "--inner-lr 0.4",
-                "--outer-lr 1e-3",
-                "--seq-len 128",
-                "--num-signal-positions 12",
-                "--device cuda",
-                "--allow-experimental-backends",
-                f"--csv-out {isolate_csv}",
-                f"--summary-out {isolate_summary}",
-            ]
-        )
+        "bash experiments/phase12/scripts/run_phase12_fused_meta_canary.sh",
+        env={
+            "TAG": canary_tag,
+            "DEVICE": "cuda",
+        },
     )
 
 
 # %% [markdown]
-# ## 5) Inspect latest isolate failures
-# This prints non-OK rows to quickly locate non-finite failures.
+# ## 5) Inspect latest canary output
+# If the canary fails, the script exits non-zero and the newest CSV points to
+# the first divergence step.
 
 # %%
-latest_isolate = latest_file("experiments/phase12/runs/phase12_stability_isolate_*.csv")
-if latest_isolate:
-    print_failures(latest_isolate)
+latest_canary = latest_file("experiments/phase12/runs/phase12_fused_meta_canary_*_seed*.csv")
+if latest_canary:
+    print_failures(latest_canary)
 else:
-    print("No stability isolate CSV found yet.")
+    print("No fused-meta canary CSV found yet.")
 
 
 # %% [markdown]
@@ -234,6 +221,7 @@ else:
 #   - backend: `triton_fused_meta_strict`
 #   - mode: `FULL_HYBRID`
 #   - `meta_every_n_outer=8`
+#   - `meta_last_n_inner=2`
 #
 # ### Experimental path
 # - `triton_fused_meta` requires explicit opt-in:
@@ -241,7 +229,6 @@ else:
 #   - CLI flag: `--allow-experimental-backends`
 #
 # ### Future work checklist
-# - Stabilize `triton_fused_meta` on diffusion-like configs (remove non-finite failures).
+# - Stabilize `triton_fused_meta` on the canary config until fallback-free runs pass.
 # - Keep meta-contract gate mandatory before/after performance changes.
 # - After stability parity with strict path, optimize fused meta recompute/backward hotspots.
-
