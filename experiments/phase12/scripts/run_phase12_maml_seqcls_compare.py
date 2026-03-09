@@ -229,6 +229,24 @@ def main() -> None:
         "wall_time_total_s",
         "mean_outer_step_time_s",
         "peak_cuda_mem_bytes",
+        "meta_loss_time_s",
+        "outer_backward_time_s",
+        "optimizer_step_time_s",
+        "meta_loss_time_per_outer_step_s",
+        "outer_backward_time_per_outer_step_s",
+        "optimizer_step_time_per_outer_step_s",
+        "hybrid_meta_meta_loss_time_s",
+        "hybrid_fo_meta_loss_time_s",
+        "hybrid_meta_outer_backward_time_s",
+        "hybrid_fo_outer_backward_time_s",
+        "hybrid_meta_optimizer_step_time_s",
+        "hybrid_fo_optimizer_step_time_s",
+        "hybrid_meta_meta_loss_time_per_meta_step_s",
+        "hybrid_fo_meta_loss_time_per_fo_step_s",
+        "hybrid_meta_outer_backward_time_per_meta_step_s",
+        "hybrid_fo_outer_backward_time_per_fo_step_s",
+        "hybrid_meta_optimizer_step_time_per_meta_step_s",
+        "hybrid_fo_optimizer_step_time_per_fo_step_s",
         "n_fast_bwd",
         "n_meta_bwd",
         "n_fallback_bwd",
@@ -242,6 +260,26 @@ def main() -> None:
         "meta_bwd_time_per_outer_step_s",
         "meta_recompute_time_per_outer_step_s",
         "fallback_bwd_time_per_outer_step_s",
+        "n_tasks_profiled",
+        "n_inner_steps_profiled",
+        "n_support_forward_calls",
+        "n_support_grad_calls",
+        "n_support_grad_create_graph_calls",
+        "n_support_grad_no_graph_calls",
+        "n_param_update_calls",
+        "n_query_forward_calls",
+        "support_forward_time_s",
+        "support_grad_time_s",
+        "support_grad_create_graph_time_s",
+        "support_grad_no_graph_time_s",
+        "param_update_time_s",
+        "query_forward_time_s",
+        "support_forward_time_per_outer_step_s",
+        "support_grad_time_per_outer_step_s",
+        "support_grad_create_graph_time_per_outer_step_s",
+        "support_grad_no_graph_time_per_outer_step_s",
+        "param_update_time_per_outer_step_s",
+        "query_forward_time_per_outer_step_s",
         "sdpa_debug_n_nonfinite_m",
         "sdpa_debug_n_nonfinite_l",
         "sdpa_debug_n_tiny_l",
@@ -402,6 +440,24 @@ def main() -> None:
                                 "wall_time_total_s": float("nan"),
                                 "mean_outer_step_time_s": float("nan"),
                                 "peak_cuda_mem_bytes": 0,
+                                "meta_loss_time_s": float("nan"),
+                                "outer_backward_time_s": float("nan"),
+                                "optimizer_step_time_s": float("nan"),
+                                "meta_loss_time_per_outer_step_s": float("nan"),
+                                "outer_backward_time_per_outer_step_s": float("nan"),
+                                "optimizer_step_time_per_outer_step_s": float("nan"),
+                                "hybrid_meta_meta_loss_time_s": float("nan"),
+                                "hybrid_fo_meta_loss_time_s": float("nan"),
+                                "hybrid_meta_outer_backward_time_s": float("nan"),
+                                "hybrid_fo_outer_backward_time_s": float("nan"),
+                                "hybrid_meta_optimizer_step_time_s": float("nan"),
+                                "hybrid_fo_optimizer_step_time_s": float("nan"),
+                                "hybrid_meta_meta_loss_time_per_meta_step_s": float("nan"),
+                                "hybrid_fo_meta_loss_time_per_fo_step_s": float("nan"),
+                                "hybrid_meta_outer_backward_time_per_meta_step_s": float("nan"),
+                                "hybrid_fo_outer_backward_time_per_fo_step_s": float("nan"),
+                                "hybrid_meta_optimizer_step_time_per_meta_step_s": float("nan"),
+                                "hybrid_fo_optimizer_step_time_per_fo_step_s": float("nan"),
                                 "convergence_delta": float("nan"),
                                 "n_fast_bwd": 0,
                                 "n_meta_bwd": 0,
@@ -416,6 +472,26 @@ def main() -> None:
                                 "meta_bwd_time_per_outer_step_s": float("nan"),
                                 "meta_recompute_time_per_outer_step_s": float("nan"),
                                 "fallback_bwd_time_per_outer_step_s": float("nan"),
+                                "n_tasks_profiled": 0,
+                                "n_inner_steps_profiled": 0,
+                                "n_support_forward_calls": 0,
+                                "n_support_grad_calls": 0,
+                                "n_support_grad_create_graph_calls": 0,
+                                "n_support_grad_no_graph_calls": 0,
+                                "n_param_update_calls": 0,
+                                "n_query_forward_calls": 0,
+                                "support_forward_time_s": float("nan"),
+                                "support_grad_time_s": float("nan"),
+                                "support_grad_create_graph_time_s": float("nan"),
+                                "support_grad_no_graph_time_s": float("nan"),
+                                "param_update_time_s": float("nan"),
+                                "query_forward_time_s": float("nan"),
+                                "support_forward_time_per_outer_step_s": float("nan"),
+                                "support_grad_time_per_outer_step_s": float("nan"),
+                                "support_grad_create_graph_time_per_outer_step_s": float("nan"),
+                                "support_grad_no_graph_time_per_outer_step_s": float("nan"),
+                                "param_update_time_per_outer_step_s": float("nan"),
+                                "query_forward_time_per_outer_step_s": float("nan"),
                                 "sdpa_debug_n_nonfinite_m": 0,
                                 "sdpa_debug_n_nonfinite_l": 0,
                                 "sdpa_debug_n_tiny_l": 0,
@@ -518,6 +594,12 @@ def main() -> None:
                     "mean_outer_step_time_s_std",
                     "wall_time_total_s_mean",
                     "wall_time_total_s_std",
+                    "meta_loss_time_per_outer_step_s_mean",
+                    "meta_loss_time_per_outer_step_s_std",
+                    "outer_backward_time_per_outer_step_s_mean",
+                    "outer_backward_time_per_outer_step_s_std",
+                    "optimizer_step_time_per_outer_step_s_mean",
+                    "optimizer_step_time_per_outer_step_s_std",
                     "n_fast_bwd_mean",
                     "n_fast_bwd_std",
                     "n_meta_bwd_mean",
@@ -536,6 +618,30 @@ def main() -> None:
                     "meta_recompute_time_per_outer_step_s_std",
                     "fallback_bwd_time_per_outer_step_s_mean",
                     "fallback_bwd_time_per_outer_step_s_std",
+                    "support_forward_time_per_outer_step_s_mean",
+                    "support_forward_time_per_outer_step_s_std",
+                    "support_grad_time_per_outer_step_s_mean",
+                    "support_grad_time_per_outer_step_s_std",
+                    "support_grad_create_graph_time_per_outer_step_s_mean",
+                    "support_grad_create_graph_time_per_outer_step_s_std",
+                    "support_grad_no_graph_time_per_outer_step_s_mean",
+                    "support_grad_no_graph_time_per_outer_step_s_std",
+                    "param_update_time_per_outer_step_s_mean",
+                    "param_update_time_per_outer_step_s_std",
+                    "query_forward_time_per_outer_step_s_mean",
+                    "query_forward_time_per_outer_step_s_std",
+                    "hybrid_meta_meta_loss_time_per_meta_step_s_mean",
+                    "hybrid_meta_meta_loss_time_per_meta_step_s_std",
+                    "hybrid_fo_meta_loss_time_per_fo_step_s_mean",
+                    "hybrid_fo_meta_loss_time_per_fo_step_s_std",
+                    "hybrid_meta_outer_backward_time_per_meta_step_s_mean",
+                    "hybrid_meta_outer_backward_time_per_meta_step_s_std",
+                    "hybrid_fo_outer_backward_time_per_fo_step_s_mean",
+                    "hybrid_fo_outer_backward_time_per_fo_step_s_std",
+                    "hybrid_meta_optimizer_step_time_per_meta_step_s_mean",
+                    "hybrid_meta_optimizer_step_time_per_meta_step_s_std",
+                    "hybrid_fo_optimizer_step_time_per_fo_step_s_mean",
+                    "hybrid_fo_optimizer_step_time_per_fo_step_s_std",
                     "n_hybrid_meta_steps_mean",
                     "n_hybrid_meta_steps_std",
                     "n_hybrid_fo_steps_mean",
@@ -552,6 +658,21 @@ def main() -> None:
                 ]
                 wall_times = [
                     float(x["wall_time_total_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                meta_loss_time_step_vals = [
+                    float(x["meta_loss_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                outer_backward_time_step_vals = [
+                    float(x["outer_backward_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                optimizer_step_time_step_vals = [
+                    float(x["optimizer_step_time_per_outer_step_s"])
                     for x in items
                     if str(x.get("status")) == "OK"
                 ]
@@ -597,6 +718,36 @@ def main() -> None:
                     for x in items
                     if str(x.get("status")) == "OK"
                 ]
+                support_forward_time_step_vals = [
+                    float(x["support_forward_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                support_grad_time_step_vals = [
+                    float(x["support_grad_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                support_grad_create_graph_time_step_vals = [
+                    float(x["support_grad_create_graph_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                support_grad_no_graph_time_step_vals = [
+                    float(x["support_grad_no_graph_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                param_update_time_step_vals = [
+                    float(x["param_update_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
+                query_forward_time_step_vals = [
+                    float(x["query_forward_time_per_outer_step_s"])
+                    for x in items
+                    if str(x.get("status")) == "OK"
+                ]
                 hybrid_meta_step_vals = [
                     float(x["n_hybrid_meta_steps"])
                     for x in items
@@ -632,6 +783,12 @@ def main() -> None:
                         _std(step_times),
                         _mean(wall_times),
                         _std(wall_times),
+                        _mean(meta_loss_time_step_vals),
+                        _std(meta_loss_time_step_vals),
+                        _mean(outer_backward_time_step_vals),
+                        _std(outer_backward_time_step_vals),
+                        _mean(optimizer_step_time_step_vals),
+                        _std(optimizer_step_time_step_vals),
                         _mean(n_fast_bwd_vals),
                         _std(n_fast_bwd_vals),
                         _mean(n_meta_bwd_vals),
@@ -650,6 +807,102 @@ def main() -> None:
                         _std(meta_recompute_time_step_vals),
                         _mean(fallback_time_step_vals),
                         _std(fallback_time_step_vals),
+                        _mean(support_forward_time_step_vals),
+                        _std(support_forward_time_step_vals),
+                        _mean(support_grad_time_step_vals),
+                        _std(support_grad_time_step_vals),
+                        _mean(support_grad_create_graph_time_step_vals),
+                        _std(support_grad_create_graph_time_step_vals),
+                        _mean(support_grad_no_graph_time_step_vals),
+                        _std(support_grad_no_graph_time_step_vals),
+                        _mean(param_update_time_step_vals),
+                        _std(param_update_time_step_vals),
+                        _mean(query_forward_time_step_vals),
+                        _std(query_forward_time_step_vals),
+                        _mean(
+                            [
+                                float(x["hybrid_meta_meta_loss_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_meta_meta_loss_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _mean(
+                            [
+                                float(x["hybrid_fo_meta_loss_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_fo_meta_loss_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _mean(
+                            [
+                                float(x["hybrid_meta_outer_backward_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_meta_outer_backward_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _mean(
+                            [
+                                float(x["hybrid_fo_outer_backward_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_fo_outer_backward_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _mean(
+                            [
+                                float(x["hybrid_meta_optimizer_step_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_meta_optimizer_step_time_per_meta_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _mean(
+                            [
+                                float(x["hybrid_fo_optimizer_step_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
+                        _std(
+                            [
+                                float(x["hybrid_fo_optimizer_step_time_per_fo_step_s"])
+                                for x in items
+                                if str(x.get("status")) == "OK"
+                            ]
+                        ),
                         _mean(hybrid_meta_step_vals),
                         _std(hybrid_meta_step_vals),
                         _mean(hybrid_fo_step_vals),

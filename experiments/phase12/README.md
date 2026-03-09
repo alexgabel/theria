@@ -15,6 +15,21 @@ attention backends.
 - Experimental backend only:
   - backend: `triton_fused_meta`
 
+## Frozen stable-path baseline (2026-03-09)
+
+Accepted reference point for all Phase 4 stable-path work:
+- gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_143549`
+- frontier tag: `phase12_stable_regression_20260309_143549`
+
+Fixed invariants during Phase 4:
+- `meta_every_n_outer=8`
+- `meta_last_n_inner=2`
+- equal-time frontier tolerance: `0.01`
+- regression harness: `experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
+
+The single source of truth for these defaults is:
+- `experiments/phase12/phase12_stable_baseline.env`
+
 `triton_fused` is removed from current frontier recommendations until its
 non-finite issue is fixed. It is not a valid deployment frontier backend.
 
@@ -54,6 +69,32 @@ META_EVERY_N_OUTER=8 \
 META_LAST_N_INNER=2 \
 bash experiments/phase12/scripts/run_phase12_maml_gate_and_frontier.sh
 ```
+
+Stable practical systems target (default for wall-clock/profiling work):
+
+```bash
+bash experiments/phase12/scripts/run_phase12_maml_stable_practical.sh
+```
+
+This wrapper intentionally fixes the practical hybrid knob:
+- backend: `triton_fused_meta_strict`
+- mode: `FULL_HYBRID`
+- `meta_every_n_outer=8`
+- `meta_last_n_inner=2`
+
+Use this for systems profiling and stable wall-clock comparisons before
+attempting to make pure `FULL` cheap.
+
+Stable optimization regression loop after each optimization batch:
+
+```bash
+bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh
+```
+
+This enforces:
+- meta-contract gate passes
+- equal-step `triton_fused_meta_strict FULL` remains aligned with `reference FULL`
+- equal-time `triton_fused_meta_strict FULL_HYBRID` stays on the same-backend FO frontier
 
 ## Primary instability canary
 

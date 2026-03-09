@@ -2,11 +2,18 @@
 set -euo pipefail
 
 # Fixed-wall-clock MAML seqcls frontier:
-# stable baseline defaults to triton_fused_meta_strict FULL/FULL_HYBRID.
+# stable systems target defaults to triton_fused_meta_strict FULL_HYBRID
+# with meta_every_n_outer=8 and meta_last_n_inner=2.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
+
+BASELINE_ENV="${REPO_ROOT}/experiments/phase12/phase12_stable_baseline.env"
+if [[ -f "${BASELINE_ENV}" ]]; then
+  # shellcheck disable=SC1090
+  source "${BASELINE_ENV}"
+fi
 
 TAG="${TAG:-$(date +%Y%m%d_%H%M%S)}"
 RUNS_DIR="experiments/phase12/runs"
@@ -16,10 +23,11 @@ CSV_OUT="${CSV_OUT:-${RUNS_DIR}/phase12_maml_seqcls_wallclock_${TAG}.csv}"
 SUMMARY_OUT="${SUMMARY_OUT:-${RUNS_DIR}/phase12_maml_seqcls_wallclock_${TAG}_summary.csv}"
 
 BACKENDS="${BACKENDS:-triton_fused_meta_strict}"
-MODES="${MODES:-FULL,FULL_HYBRID}"
+MODES="${MODES:-FULL_HYBRID}"
 INNER_STEPS="${INNER_STEPS:-2,5,10}"
 SEEDS="${SEEDS:-0,1,2,3,4}"
-META_EVERY_N_OUTER="${META_EVERY_N_OUTER:-8}"
+META_EVERY_N_OUTER="${META_EVERY_N_OUTER:-${PHASE12_STABLE_META_EVERY_N_OUTER:-8}}"
+META_LAST_N_INNER="${META_LAST_N_INNER:-${PHASE12_STABLE_META_LAST_N_INNER:-2}}"
 ALLOW_EXPERIMENTAL_BACKENDS="${ALLOW_EXPERIMENTAL_BACKENDS:-0}"
 
 WALL_CLOCK_BUDGET_S="${WALL_CLOCK_BUDGET_S:-30}"
@@ -52,6 +60,7 @@ PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.
   --inner-lr "${INNER_LR}" \
   --outer-lr "${OUTER_LR}" \
   --meta-every-n-outer "${META_EVERY_N_OUTER}" \
+  --meta-last-n-inner "${META_LAST_N_INNER}" \
   --seq-len "${SEQ_LEN}" \
   --num-signal-positions "${NUM_SIGNAL_POSITIONS}" \
   --device "${DEVICE}" \

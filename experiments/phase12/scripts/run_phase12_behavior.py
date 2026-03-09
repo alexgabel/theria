@@ -37,6 +37,7 @@ from theria.attention.triton_sdpa_backward import (
     reset_triton_sdpa_debug_counters,
 )
 from theria.maml.loops import meta_loss_on_tasks, meta_loss_on_tasks_full_frozen
+from theria.maml.loops import get_maml_profile_counters, reset_maml_profile_counters
 from theria.tasks.synthetic_seqcls import task_sampler
 from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
 
@@ -57,6 +58,18 @@ def _mean_first(values: list[float], n: int) -> float:
         return float("nan")
     take = values[: min(n, len(values))]
     return float(sum(take) / len(take))
+
+
+def _profile_start(device: torch.device) -> float:
+    if device.type == "cuda" and not torch.cuda.is_current_stream_capturing():
+        torch.cuda.synchronize(device)
+    return time.perf_counter()
+
+
+def _profile_elapsed(start_t: float, device: torch.device) -> float:
+    if device.type == "cuda" and not torch.cuda.is_current_stream_capturing():
+        torch.cuda.synchronize(device)
+    return time.perf_counter() - start_t
 
 
 def run_behavior(
@@ -96,9 +109,12 @@ def run_behavior(
         raise ValueError("meta_last_n_inner must be <= inner_steps")
     reset_triton_meta_bwd_counters()
     reset_triton_sdpa_debug_counters()
+    reset_maml_profile_counters()
     prev_meta_profile_env = os.environ.get("THERIA_TRITON_META_PROFILE")
+    prev_maml_profile_env = os.environ.get("THERIA_MAML_PROFILE")
     if profile_meta_bwd:
         os.environ["THERIA_TRITON_META_PROFILE"] = "1"
+        os.environ["THERIA_MAML_PROFILE"] = "1"
     torch.manual_seed(seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
@@ -163,6 +179,15 @@ def run_behavior(
 
     n_hybrid_meta_steps = 0
     n_hybrid_fo_steps = 0
+    meta_loss_time_s = 0.0
+    outer_backward_time_s = 0.0
+    optimizer_step_time_s = 0.0
+    hybrid_meta_meta_loss_time_s = 0.0
+    hybrid_fo_meta_loss_time_s = 0.0
+    hybrid_meta_outer_backward_time_s = 0.0
+    hybrid_fo_outer_backward_time_s = 0.0
+    hybrid_meta_optimizer_step_time_s = 0.0
+    hybrid_fo_optimizer_step_time_s = 0.0
     for step_idx in range(outer_steps):
         optimizer.zero_grad(set_to_none=True)
         tasks = [
@@ -180,7 +205,9 @@ def run_behavior(
             enabled=autocast_enabled,
             dtype=cast_dtype,
         ):
+            is_hybrid_meta_step = False
             if mode == "FULL_FROZEN":
+                meta_loss_t0 = _profile_start(device) if profile_meta_bwd else 0.0
                 outer_loss, metrics, meta_grads = meta_loss_on_tasks_full_frozen(
                     model=model,
                     tasks=tasks,
@@ -188,6 +215,8 @@ def run_behavior(
                     inner_steps=inner_steps,
                     return_metrics=True,
                 )
+                if profile_meta_bwd:
+                    meta_loss_time_s += _profile_elapsed(meta_loss_t0, device)
                 for (_, p), g in zip(model.named_parameters(), meta_grads):
                     p.grad = g
             else:
@@ -195,6 +224,7 @@ def run_behavior(
                 fo_strict_step = fo_strict
                 if mode == "FULL_HYBRID":
                     use_meta_step = (step_idx % meta_every_n_outer) == 0
+                    is_hybrid_meta_step = use_meta_step
                     fo_step = not use_meta_step
                     fo_strict_step = False
                     if use_meta_step:
@@ -202,6 +232,7 @@ def run_behavior(
                     else:
                         n_hybrid_fo_steps += 1
                 meta_last_n_inner_step = meta_last_n_inner if not fo_step else 0
+                meta_loss_t0 = _profile_start(device) if profile_meta_bwd else 0.0
                 outer_loss, metrics = meta_loss_on_tasks(
                     model=model,
                     tasks=tasks,
@@ -214,11 +245,37 @@ def run_behavior(
                     finite_prefix=f"outer_step={step_idx}",
                     return_metrics=True,
                 )
+                if profile_meta_bwd:
+                    meta_loss_elapsed = _profile_elapsed(meta_loss_t0, device)
+                    meta_loss_time_s += meta_loss_elapsed
+                    if mode == "FULL_HYBRID":
+                        if is_hybrid_meta_step:
+                            hybrid_meta_meta_loss_time_s += meta_loss_elapsed
+                        else:
+                            hybrid_fo_meta_loss_time_s += meta_loss_elapsed
                 if fail_on_nonfinite and not torch.isfinite(outer_loss):
                     raise RuntimeError(
                         f"NONFINITE outer_loss outer_step={step_idx}"
                     )
-                outer_loss.backward()
+                trainable_params = [p for p in model.parameters() if p.requires_grad]
+                backward_t0 = _profile_start(device) if profile_meta_bwd else 0.0
+                outer_grads = torch.autograd.grad(
+                    outer_loss,
+                    trainable_params,
+                    create_graph=False,
+                    retain_graph=False,
+                    allow_unused=True,
+                )
+                for p, g in zip(trainable_params, outer_grads):
+                    p.grad = g
+                if profile_meta_bwd:
+                    backward_elapsed = _profile_elapsed(backward_t0, device)
+                    outer_backward_time_s += backward_elapsed
+                    if mode == "FULL_HYBRID":
+                        if is_hybrid_meta_step:
+                            hybrid_meta_outer_backward_time_s += backward_elapsed
+                        else:
+                            hybrid_fo_outer_backward_time_s += backward_elapsed
 
         qg = model.q_proj.weight.grad
         kg = model.k_proj.weight.grad
@@ -234,7 +291,16 @@ def run_behavior(
         k_grad_norms.append(float(kg.norm().item()) if kg is not None else 0.0)
         v_grad_norms.append(float(vg.norm().item()) if vg is not None else 0.0)
 
+        optimizer_step_t0 = _profile_start(device) if profile_meta_bwd else 0.0
         optimizer.step()
+        if profile_meta_bwd:
+            optimizer_elapsed = _profile_elapsed(optimizer_step_t0, device)
+            optimizer_step_time_s += optimizer_elapsed
+            if mode == "FULL_HYBRID":
+                if is_hybrid_meta_step:
+                    hybrid_meta_optimizer_step_time_s += optimizer_elapsed
+                else:
+                    hybrid_fo_optimizer_step_time_s += optimizer_elapsed
 
         outer_losses.append(float(outer_loss.item()))
         outer_accs.append(float(metrics["post_adapt_acc"]))
@@ -258,6 +324,7 @@ def run_behavior(
     # Capture counters for the actual training loop only; reset before optional probes.
     meta_bwd_counts = get_triton_meta_bwd_counters(reset=True)
     sdpa_debug_counts = get_triton_sdpa_debug_counters(reset=True)
+    maml_profile_counts = get_maml_profile_counters(reset=True)
 
     # Sparse rel_diff probe (once per run): FULL vs FO on one fresh task
     rel_diff_probe_val = float("nan")
@@ -310,6 +377,7 @@ def run_behavior(
         # Keep counters scoped to training path; probe calls are diagnostic only.
         reset_triton_meta_bwd_counters()
         reset_triton_sdpa_debug_counters()
+        reset_maml_profile_counters()
 
     fallback_bwd_count = int(meta_bwd_counts.get("n_fallback_bwd", 0))
     row = {
@@ -342,6 +410,30 @@ def run_behavior(
         "wall_time_total_s": wall_time_total_s,
         "mean_outer_step_time_s": mean_outer_step_time_s,
         "peak_cuda_mem_bytes": peak_cuda_mem_bytes,
+        "meta_loss_time_s": meta_loss_time_s,
+        "outer_backward_time_s": outer_backward_time_s,
+        "optimizer_step_time_s": optimizer_step_time_s,
+        "meta_loss_time_per_outer_step_s": meta_loss_time_s / max(outer_steps, 1),
+        "outer_backward_time_per_outer_step_s": outer_backward_time_s / max(outer_steps, 1),
+        "optimizer_step_time_per_outer_step_s": optimizer_step_time_s / max(outer_steps, 1),
+        "hybrid_meta_meta_loss_time_s": hybrid_meta_meta_loss_time_s,
+        "hybrid_fo_meta_loss_time_s": hybrid_fo_meta_loss_time_s,
+        "hybrid_meta_outer_backward_time_s": hybrid_meta_outer_backward_time_s,
+        "hybrid_fo_outer_backward_time_s": hybrid_fo_outer_backward_time_s,
+        "hybrid_meta_optimizer_step_time_s": hybrid_meta_optimizer_step_time_s,
+        "hybrid_fo_optimizer_step_time_s": hybrid_fo_optimizer_step_time_s,
+        "hybrid_meta_meta_loss_time_per_meta_step_s": hybrid_meta_meta_loss_time_s
+        / max(n_hybrid_meta_steps, 1),
+        "hybrid_fo_meta_loss_time_per_fo_step_s": hybrid_fo_meta_loss_time_s
+        / max(n_hybrid_fo_steps, 1),
+        "hybrid_meta_outer_backward_time_per_meta_step_s": hybrid_meta_outer_backward_time_s
+        / max(n_hybrid_meta_steps, 1),
+        "hybrid_fo_outer_backward_time_per_fo_step_s": hybrid_fo_outer_backward_time_s
+        / max(n_hybrid_fo_steps, 1),
+        "hybrid_meta_optimizer_step_time_per_meta_step_s": hybrid_meta_optimizer_step_time_s
+        / max(n_hybrid_meta_steps, 1),
+        "hybrid_fo_optimizer_step_time_per_fo_step_s": hybrid_fo_optimizer_step_time_s
+        / max(n_hybrid_fo_steps, 1),
         "n_fast_bwd": int(meta_bwd_counts["n_fast_bwd"]),
         "n_meta_bwd": int(meta_bwd_counts["n_meta_bwd"]),
         "n_fallback_bwd": fallback_bwd_count,
@@ -361,6 +453,52 @@ def run_behavior(
         / max(outer_steps, 1),
         "fallback_bwd_time_per_outer_step_s": float(
             meta_bwd_counts.get("fallback_bwd_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "n_tasks_profiled": int(maml_profile_counts.get("n_tasks", 0)),
+        "n_inner_steps_profiled": int(maml_profile_counts.get("n_inner_steps", 0)),
+        "n_support_forward_calls": int(maml_profile_counts.get("n_support_forward_calls", 0)),
+        "n_support_grad_calls": int(maml_profile_counts.get("n_support_grad_calls", 0)),
+        "n_support_grad_create_graph_calls": int(
+            maml_profile_counts.get("n_support_grad_create_graph_calls", 0)
+        ),
+        "n_support_grad_no_graph_calls": int(
+            maml_profile_counts.get("n_support_grad_no_graph_calls", 0)
+        ),
+        "n_param_update_calls": int(maml_profile_counts.get("n_param_update_calls", 0)),
+        "n_query_forward_calls": int(maml_profile_counts.get("n_query_forward_calls", 0)),
+        "support_forward_time_s": float(maml_profile_counts.get("support_forward_time_s", 0.0)),
+        "support_grad_time_s": float(maml_profile_counts.get("support_grad_time_s", 0.0)),
+        "support_grad_create_graph_time_s": float(
+            maml_profile_counts.get("support_grad_create_graph_time_s", 0.0)
+        ),
+        "support_grad_no_graph_time_s": float(
+            maml_profile_counts.get("support_grad_no_graph_time_s", 0.0)
+        ),
+        "param_update_time_s": float(maml_profile_counts.get("param_update_time_s", 0.0)),
+        "query_forward_time_s": float(maml_profile_counts.get("query_forward_time_s", 0.0)),
+        "support_forward_time_per_outer_step_s": float(
+            maml_profile_counts.get("support_forward_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "support_grad_time_per_outer_step_s": float(
+            maml_profile_counts.get("support_grad_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "support_grad_create_graph_time_per_outer_step_s": float(
+            maml_profile_counts.get("support_grad_create_graph_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "support_grad_no_graph_time_per_outer_step_s": float(
+            maml_profile_counts.get("support_grad_no_graph_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "param_update_time_per_outer_step_s": float(
+            maml_profile_counts.get("param_update_time_s", 0.0)
+        )
+        / max(outer_steps, 1),
+        "query_forward_time_per_outer_step_s": float(
+            maml_profile_counts.get("query_forward_time_s", 0.0)
         )
         / max(outer_steps, 1),
         "sdpa_debug_n_nonfinite_m": int(sdpa_debug_counts.get("n_nonfinite_m", 0)),
@@ -387,6 +525,10 @@ def run_behavior(
             os.environ.pop("THERIA_TRITON_META_PROFILE", None)
         else:
             os.environ["THERIA_TRITON_META_PROFILE"] = prev_meta_profile_env
+        if prev_maml_profile_env is None:
+            os.environ.pop("THERIA_MAML_PROFILE", None)
+        else:
+            os.environ["THERIA_MAML_PROFILE"] = prev_maml_profile_env
     return row
 
 
@@ -441,7 +583,10 @@ def main() -> None:
     parser.add_argument(
         "--profile-meta-bwd",
         action="store_true",
-        help="Enable Triton meta backward timing counters via THERIA_TRITON_META_PROFILE=1.",
+        help=(
+            "Enable Triton meta backward and MAML loop timing counters via "
+            "THERIA_TRITON_META_PROFILE=1 and THERIA_MAML_PROFILE=1."
+        ),
     )
     parser.add_argument(
         "--no-fail-on-nonfinite",
@@ -523,6 +668,44 @@ def main() -> None:
             "meta_bwd_time_per_outer_step_s": float("nan"),
             "meta_recompute_time_per_outer_step_s": float("nan"),
             "fallback_bwd_time_per_outer_step_s": float("nan"),
+            "n_tasks_profiled": 0,
+            "n_inner_steps_profiled": 0,
+            "n_support_forward_calls": 0,
+            "n_support_grad_calls": 0,
+            "n_support_grad_create_graph_calls": 0,
+            "n_support_grad_no_graph_calls": 0,
+            "n_param_update_calls": 0,
+            "n_query_forward_calls": 0,
+            "meta_loss_time_s": float("nan"),
+            "outer_backward_time_s": float("nan"),
+            "optimizer_step_time_s": float("nan"),
+            "meta_loss_time_per_outer_step_s": float("nan"),
+            "outer_backward_time_per_outer_step_s": float("nan"),
+            "optimizer_step_time_per_outer_step_s": float("nan"),
+            "hybrid_meta_meta_loss_time_s": float("nan"),
+            "hybrid_fo_meta_loss_time_s": float("nan"),
+            "hybrid_meta_outer_backward_time_s": float("nan"),
+            "hybrid_fo_outer_backward_time_s": float("nan"),
+            "hybrid_meta_optimizer_step_time_s": float("nan"),
+            "hybrid_fo_optimizer_step_time_s": float("nan"),
+            "hybrid_meta_meta_loss_time_per_meta_step_s": float("nan"),
+            "hybrid_fo_meta_loss_time_per_fo_step_s": float("nan"),
+            "hybrid_meta_outer_backward_time_per_meta_step_s": float("nan"),
+            "hybrid_fo_outer_backward_time_per_fo_step_s": float("nan"),
+            "hybrid_meta_optimizer_step_time_per_meta_step_s": float("nan"),
+            "hybrid_fo_optimizer_step_time_per_fo_step_s": float("nan"),
+            "support_forward_time_s": float("nan"),
+            "support_grad_time_s": float("nan"),
+            "support_grad_create_graph_time_s": float("nan"),
+            "support_grad_no_graph_time_s": float("nan"),
+            "param_update_time_s": float("nan"),
+            "query_forward_time_s": float("nan"),
+            "support_forward_time_per_outer_step_s": float("nan"),
+            "support_grad_time_per_outer_step_s": float("nan"),
+            "support_grad_create_graph_time_per_outer_step_s": float("nan"),
+            "support_grad_no_graph_time_per_outer_step_s": float("nan"),
+            "param_update_time_per_outer_step_s": float("nan"),
+            "query_forward_time_per_outer_step_s": float("nan"),
             "sdpa_debug_n_nonfinite_m": 0,
             "sdpa_debug_n_nonfinite_l": 0,
             "sdpa_debug_n_tiny_l": 0,
@@ -561,8 +744,12 @@ def main() -> None:
         f"n_fast_bwd={row.get('n_fast_bwd',0)} "
         f"n_meta_bwd={row.get('n_meta_bwd',0)} "
         f"n_fallback_bwd={row.get('n_fallback_bwd',0)} "
+        f"meta_loss_time_s={row.get('meta_loss_time_s',0.0)} "
+        f"outer_backward_time_s={row.get('outer_backward_time_s',0.0)} "
         f"meta_bwd_time_s={row.get('meta_bwd_time_s',0.0)} "
         f"meta_recompute_time_s={row.get('meta_recompute_time_s',0.0)} "
+        f"support_grad_time_s={row.get('support_grad_time_s',0.0)} "
+        f"query_forward_time_s={row.get('query_forward_time_s',0.0)} "
         f"fallback_bwd_time_s={row.get('fallback_bwd_time_s',0.0)} "
         f"status={status}"
     )
@@ -603,6 +790,24 @@ def main() -> None:
                     "wall_time_total_s",
                     "mean_outer_step_time_s",
                     "peak_cuda_mem_bytes",
+                    "meta_loss_time_s",
+                    "outer_backward_time_s",
+                    "optimizer_step_time_s",
+                    "meta_loss_time_per_outer_step_s",
+                    "outer_backward_time_per_outer_step_s",
+                    "optimizer_step_time_per_outer_step_s",
+                    "hybrid_meta_meta_loss_time_s",
+                    "hybrid_fo_meta_loss_time_s",
+                    "hybrid_meta_outer_backward_time_s",
+                    "hybrid_fo_outer_backward_time_s",
+                    "hybrid_meta_optimizer_step_time_s",
+                    "hybrid_fo_optimizer_step_time_s",
+                    "hybrid_meta_meta_loss_time_per_meta_step_s",
+                    "hybrid_fo_meta_loss_time_per_fo_step_s",
+                    "hybrid_meta_outer_backward_time_per_meta_step_s",
+                    "hybrid_fo_outer_backward_time_per_fo_step_s",
+                    "hybrid_meta_optimizer_step_time_per_meta_step_s",
+                    "hybrid_fo_optimizer_step_time_per_fo_step_s",
                     "n_fast_bwd",
                     "n_meta_bwd",
                     "n_fallback_bwd",
@@ -616,6 +821,26 @@ def main() -> None:
                     "meta_bwd_time_per_outer_step_s",
                     "meta_recompute_time_per_outer_step_s",
                     "fallback_bwd_time_per_outer_step_s",
+                    "n_tasks_profiled",
+                    "n_inner_steps_profiled",
+                    "n_support_forward_calls",
+                    "n_support_grad_calls",
+                    "n_support_grad_create_graph_calls",
+                    "n_support_grad_no_graph_calls",
+                    "n_param_update_calls",
+                    "n_query_forward_calls",
+                    "support_forward_time_s",
+                    "support_grad_time_s",
+                    "support_grad_create_graph_time_s",
+                    "support_grad_no_graph_time_s",
+                    "param_update_time_s",
+                    "query_forward_time_s",
+                    "support_forward_time_per_outer_step_s",
+                    "support_grad_time_per_outer_step_s",
+                    "support_grad_create_graph_time_per_outer_step_s",
+                    "support_grad_no_graph_time_per_outer_step_s",
+                    "param_update_time_per_outer_step_s",
+                    "query_forward_time_per_outer_step_s",
                     "sdpa_debug_n_nonfinite_m",
                     "sdpa_debug_n_nonfinite_l",
                     "sdpa_debug_n_tiny_l",

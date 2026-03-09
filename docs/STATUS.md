@@ -26,6 +26,22 @@ Current policy:
 - The owned instability regression target is
   `experiments/phase12/scripts/run_phase12_fused_meta_regression.py`.
 
+## Frozen stable-path baseline
+
+Accepted on 2026-03-09:
+- gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_143549`
+- frontier tag: `phase12_stable_regression_20260309_143549`
+
+Phase 4 invariants:
+- `meta_every_n_outer=8`
+- `meta_last_n_inner=2`
+- equal-time frontier tolerance: `0.01`
+- stable regression harness:
+  `experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
+
+Source of truth:
+- `experiments/phase12/phase12_stable_baseline.env`
+
 ## High-level summary (for new users)
 
 This project builds a fully explicit SDPA (scaled dot-product attention) operator with:
