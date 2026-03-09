@@ -26,6 +26,23 @@ A one-stop notebook demo for Phase-12 MAML second-order workflows.
   - recommended commands leave `CUDA_GRAPH_STATIC` unset
 - How to run/inspect the deterministic fused-meta canary.
 
+Quick start:
+```bash
+# Correctness-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL \
+  --device cuda
+
+# Wall-clock-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL_HYBRID \
+  --meta-every-n-outer 8 \
+  --meta-last-n-inner 2 \
+  --device cuda
+```
+
 Open in VSCode/Jupyter:
 ```bash
 code examples/phase12_maml_second_order_demo.ipynb

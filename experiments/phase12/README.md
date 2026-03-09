@@ -35,6 +35,7 @@ Stable delivery invariants:
 
 The single source of truth for these defaults is:
 - `experiments/phase12/phase12_stable_baseline.env`
+- helper: `python experiments/phase12/scripts/show_phase12_stable_baseline.py`
 
 Current stable-delivery decision:
 - keep this baseline frozen
@@ -54,6 +55,35 @@ Stable delivery exit criteria:
 - docs/examples stay aligned with the frozen baseline
 - recommended commands stay on the eager path
 - no misleading CUDA-graph-ready or universal equal-time-win claims remain
+
+This is the canonical workflow page for the stable path.
+
+## Start here
+
+Copy-paste commands for the accepted eager path:
+
+```bash
+# Correctness-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL \
+  --device cuda
+
+# Wall-clock-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL_HYBRID \
+  --meta-every-n-outer 8 \
+  --meta-last-n-inner 2 \
+  --device cuda
+```
+
+Contributor checklist for stable-path changes:
+1. run `python experiments/phase12/scripts/show_phase12_stable_baseline.py`
+2. run `bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
+3. confirm equal-step `FULL` semantics still pass
+4. confirm equal-time `FULL_HYBRID` remains on the FO frontier
+5. leave `CUDA_GRAPH_STATIC` unset
 
 ## B. CUDA-Graph R&D
 

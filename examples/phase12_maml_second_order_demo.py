@@ -128,6 +128,8 @@ def print_failures(per_run_csv: Path, *, max_rows: int = 10) -> None:
 # ## 1) Environment check
 # Run this once from repo root. The notebook assumes `PYTHONPATH=.` and that
 # your CUDA env is ready (`conda activate theria-gpu` in shell before launch).
+# The canonical status page is `docs/STATUS.md`.
+# The canonical workflow page is `experiments/phase12/README.md`.
 
 # %%
 print("Repo root:", REPO_ROOT)
@@ -135,7 +137,26 @@ print("Python:", sys.executable)
 
 
 # %% [markdown]
-# ## 2) Recommended default benchmark flow (stable baseline, eager only)
+# ## 2) Start here (accepted eager path)
+# Copy-paste commands for the current supported modes:
+#
+# ```bash
+# # Correctness-sensitive use
+# PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+#   --backend triton_fused_meta_strict \
+#   --mode FULL \
+#   --device cuda
+#
+# # Wall-clock-sensitive use
+# PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+#   --backend triton_fused_meta_strict \
+#   --mode FULL_HYBRID \
+#   --meta-every-n-outer 8 \
+#   --meta-last-n-inner 2 \
+#   --device cuda
+# ```
+#
+# ## 3) Recommended default benchmark flow (stable baseline, eager only)
 # This runs:
 # 1. Meta-contract gate
 # 2. Equal-step + equal-time frontier
@@ -167,7 +188,7 @@ if RUN_BASELINE:
 
 
 # %% [markdown]
-# ## 3) Inspect latest baseline outputs
+# ## 4) Inspect latest baseline outputs
 # If you ran section 2, this cell finds the latest summaries and prints top rows.
 
 # %%
@@ -186,7 +207,7 @@ else:
 
 
 # %% [markdown]
-# ## 4) Diffusion-like fused-meta canary
+# ## 5) Diffusion-like fused-meta canary
 # This is the primary instability canary for the experimental fused meta path.
 # It runs the known bad diffusion-like config with:
 # - fixed `CUBLAS_WORKSPACE_CONFIG`
@@ -209,7 +230,7 @@ if RUN_FUSED_META_CANARY:
 
 
 # %% [markdown]
-# ## 5) Inspect latest canary output
+# ## 6) Inspect latest canary output
 # If the canary fails, the script exits non-zero and the newest CSV points to
 # the first divergence step.
 
@@ -222,7 +243,14 @@ else:
 
 
 # %% [markdown]
-# ## 6) What to share with colleagues
+# ## 7) Contributor checklist and what to share with colleagues
+#
+# ### Stable-path contributor checklist
+# 1. `python experiments/phase12/scripts/show_phase12_stable_baseline.py`
+# 2. `bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
+# 3. Confirm equal-step `FULL` semantics still pass
+# 4. Confirm equal-time `FULL_HYBRID` remains on the FO frontier
+# 5. Leave `CUDA_GRAPH_STATIC` unset
 #
 # ### Recommended usage now
 # - Correctness-sensitive FULL runs:

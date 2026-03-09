@@ -67,6 +67,35 @@ Stable delivery exit criteria:
 Source of truth:
 - `experiments/phase12/phase12_stable_baseline.env`
 
+Canonical pages:
+- status: `docs/STATUS.md`
+- workflow: `experiments/phase12/README.md`
+
+Start here:
+
+```bash
+# Correctness-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL \
+  --device cuda
+
+# Wall-clock-sensitive use
+PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
+  --backend triton_fused_meta_strict \
+  --mode FULL_HYBRID \
+  --meta-every-n-outer 8 \
+  --meta-last-n-inner 2 \
+  --device cuda
+```
+
+Contributor checklist for stable-path changes:
+1. run `python experiments/phase12/scripts/show_phase12_stable_baseline.py`
+2. run `bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
+3. confirm equal-step `FULL` semantics still pass
+4. confirm equal-time `FULL_HYBRID` remains on the FO frontier
+5. leave `CUDA_GRAPH_STATIC` unset
+
 ## B. CUDA-Graph R&D
 
 Current status: blocked.
