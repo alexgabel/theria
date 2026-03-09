@@ -13,20 +13,30 @@
 # This notebook is a one-stop demo for colleagues who want to use the current
 # Phase-12 stack for MAML with second-order attention gradients.
 #
-# ## Deliverables (current state)
-# - Stable correctness backend: `triton_fused_meta_strict` in `FULL`.
-# - Stable practical backend: `triton_fused_meta_strict` in `FULL_HYBRID`
-#   with `meta_every_n_outer=8` and `meta_last_n_inner=2`.
-# - Non-finite failure handling is enabled in frontier runs.
-# - Meta-contract gate + frontier scripts are available as default entrypoints.
+# ## A. Stable delivery
+# - Accepted stable baseline:
+#   - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
+#   - frontier tag: `phase12_stable_regression_20260309_155142`
+# - Correctness-sensitive recommendation:
+#   - `triton_fused_meta_strict FULL`
+# - Wall-clock-sensitive recommendation:
+#   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+# - Recommended benchmark and regression commands are eager-only.
 #
-# ## Future work (not solved yet)
-# - `triton_fused_meta` is experimental and can be numerically unstable on
-#   diffusion-like settings.
-# - We still need fused meta-path stabilization before claiming deployment-ready
-#   "faster and better" second-order training for diffusion MAML.
-# - After stabilization, optimize recompute/meta-backward hotspots using
-#   timing counters.
+# ## B. Experimental / blocked work
+# - `triton_fused_meta` is still experimental and requires explicit opt-in.
+# - CUDA-graph acceleration is blocked in the attention capture path and is not
+#   part of the recommended workflow.
+# - Even isolated attention-side QK capture currently fails in the repo
+#   capture-debug workflow.
+# - Do not use `CUDA_GRAPH_STATIC=1` in benchmark or regression commands.
+# - Do not treat equal-step parity alone as promotion evidence for
+#   `triton_fused_meta`.
+#
+# ## Contributor note
+# - Stable path is accepted on eager execution.
+# - CUDA-graph work is isolated R&D.
+# - Experimental fused-meta is not the default.
 
 # %%
 from __future__ import annotations
@@ -125,7 +135,7 @@ print("Python:", sys.executable)
 
 
 # %% [markdown]
-# ## 2) Recommended default benchmark flow (stable baseline)
+# ## 2) Recommended default benchmark flow (stable baseline, eager only)
 # This runs:
 # 1. Meta-contract gate
 # 2. Equal-step + equal-time frontier
@@ -134,6 +144,7 @@ print("Python:", sys.executable)
 # - backend: `triton_fused_meta_strict`
 # - modes: `FULL,FULL_HYBRID`
 # - practical setting: `meta_every_n_outer=8`, `meta_last_n_inner=2`
+# - leave `CUDA_GRAPH_STATIC` unset
 
 # %%
 RUN_BASELINE = False
@@ -228,7 +239,14 @@ else:
 #   - shell env: `ALLOW_EXPERIMENTAL_BACKENDS=1`
 #   - CLI flag: `--allow-experimental-backends`
 #
-# ### Future work checklist
-# - Stabilize `triton_fused_meta` on the canary config until fallback-free runs pass.
-# - Keep meta-contract gate mandatory before/after performance changes.
-# - After stability parity with strict path, optimize fused meta recompute/backward hotspots.
+# ### Blocked work
+# - CUDA-graph acceleration is not accepted and should stay off the benchmark path.
+# - Do not set `CUDA_GRAPH_STATIC=1` in recommended benchmark/regression commands.
+# - If CUDA-graph work resumes, start from the isolated capture-debug repro, not
+#   from the frontier runners.
+#
+# ### Reporting checklist
+# - Stable: `triton_fused_meta_strict FULL`
+# - Practical: `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+# - Experimental: `triton_fused_meta`
+# - Blocked: CUDA-graph acceleration for the stable practical path

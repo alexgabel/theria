@@ -250,6 +250,7 @@ def meta_loss_on_tasks(
     check_finite: bool = False,
     finite_prefix: str = "",
     return_metrics: bool = False,
+    return_metrics_tensors: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
     """
     Compute meta-loss across a batch/list of tasks:
@@ -259,7 +260,8 @@ def meta_loss_on_tasks(
     buffers = named_buffers(model)
 
     loss_sum: torch.Tensor | None = None
-    acc_sum = 0.0
+    acc_sum_scalar = 0.0
+    acc_sum_tensor: torch.Tensor | None = None
     n_tasks = 0
     profile_enabled = _maml_profile_enabled()
     for task_idx, task in enumerate(tasks):
@@ -307,13 +309,20 @@ def meta_loss_on_tasks(
                     name="query_acc",
                     ctx=task_prefix,
                 )
-            acc_sum += float(post_acc.item())
+            if return_metrics_tensors:
+                acc_sum_tensor = post_acc if acc_sum_tensor is None else (acc_sum_tensor + post_acc)
+            else:
+                acc_sum_scalar += float(post_acc.item())
         loss_sum = post_loss if loss_sum is None else (loss_sum + post_loss)
         n_tasks += 1
     assert loss_sum is not None and n_tasks > 0, "meta_loss_on_tasks requires non-empty tasks"
     outer = loss_sum / n_tasks
     if return_metrics:
-        mean_acc = acc_sum / n_tasks
+        if return_metrics_tensors:
+            assert acc_sum_tensor is not None
+            mean_acc_tensor = acc_sum_tensor / n_tasks
+            return outer, {"post_adapt_loss": outer, "post_adapt_acc": mean_acc_tensor}
+        mean_acc = acc_sum_scalar / n_tasks
         return outer, {"post_adapt_loss": outer.item(), "post_adapt_acc": mean_acc}
     return outer
 

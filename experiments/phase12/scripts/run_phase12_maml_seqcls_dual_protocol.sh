@@ -57,6 +57,9 @@ extra_mode_args=()
 if [[ "${PROFILE_META_BWD:-0}" == "1" ]]; then
   extra_mode_args+=(--profile-meta-bwd)
 fi
+if [[ "${CUDA_GRAPH_STATIC:-0}" == "1" ]]; then
+  extra_mode_args+=(--cuda-graph-static)
+fi
 if [[ "${ALLOW_EXPERIMENTAL_BACKENDS}" == "1" ]]; then
   extra_mode_args+=(--allow-experimental-backends)
 fi

@@ -46,6 +46,9 @@ extra_args=()
 if [[ "${ALLOW_EXPERIMENTAL_BACKENDS}" == "1" ]]; then
   extra_args+=(--allow-experimental-backends)
 fi
+if [[ "${CUDA_GRAPH_STATIC:-0}" == "1" ]]; then
+  extra_args+=(--cuda-graph-static)
+fi
 
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_maml_seqcls_compare.py \
   --backends "${BACKENDS}" \

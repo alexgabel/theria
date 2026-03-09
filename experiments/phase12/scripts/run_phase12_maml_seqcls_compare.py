@@ -166,6 +166,14 @@ def main() -> None:
         action="store_true",
         help="Opt in to experimental backend(s) such as triton_fused_meta.",
     )
+    parser.add_argument(
+        "--cuda-graph-static",
+        action="store_true",
+        help=(
+            "Enable the static-shape CUDA-graph path for CUDA "
+            "triton_fused_meta_strict FULL_HYBRID runs."
+        ),
+    )
     parser.add_argument("--seq-len", type=int, default=32)
     parser.add_argument("--num-signal-positions", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda")
@@ -229,6 +237,15 @@ def main() -> None:
         "wall_time_total_s",
         "mean_outer_step_time_s",
         "peak_cuda_mem_bytes",
+        "cuda_graph_static_requested",
+        "cuda_graph_static_used",
+        "cuda_graph_static_reason",
+        "cuda_graph_capture_time_s",
+        "cuda_graph_replay_time_s",
+        "cuda_graph_meta_capture_ok",
+        "cuda_graph_fo_capture_ok",
+        "cuda_graph_meta_replays",
+        "cuda_graph_fo_replays",
         "meta_loss_time_s",
         "outer_backward_time_s",
         "optimizer_step_time_s",
@@ -341,6 +358,7 @@ def main() -> None:
                             num_signal_positions=args.num_signal_positions,
                             device=device,
                             autocast_enabled=args.autocast,
+                            cuda_graph_static=args.cuda_graph_static,
                         )
                         step_s = float(pilot["mean_outer_step_time_s"])
                         est_steps = int(args.wall_clock_budget_s / max(step_s, 1e-9))
@@ -393,6 +411,7 @@ def main() -> None:
                                 num_signal_positions=args.num_signal_positions,
                                 device=device,
                                 autocast_enabled=args.autocast,
+                                cuda_graph_static=args.cuda_graph_static,
                             )
                             status, error = "OK", ""
                             for key in ("final_loss", "final_acc"):
@@ -440,6 +459,15 @@ def main() -> None:
                                 "wall_time_total_s": float("nan"),
                                 "mean_outer_step_time_s": float("nan"),
                                 "peak_cuda_mem_bytes": 0,
+                                "cuda_graph_static_requested": int(bool(args.cuda_graph_static)),
+                                "cuda_graph_static_used": 0,
+                                "cuda_graph_static_reason": "",
+                                "cuda_graph_capture_time_s": float("nan"),
+                                "cuda_graph_replay_time_s": float("nan"),
+                                "cuda_graph_meta_capture_ok": 0,
+                                "cuda_graph_fo_capture_ok": 0,
+                                "cuda_graph_meta_replays": 0,
+                                "cuda_graph_fo_replays": 0,
                                 "meta_loss_time_s": float("nan"),
                                 "outer_backward_time_s": float("nan"),
                                 "optimizer_step_time_s": float("nan"),

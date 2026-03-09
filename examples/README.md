@@ -9,12 +9,22 @@ This directory contains example scripts demonstrating how to use theria's attent
 A one-stop notebook demo for Phase-12 MAML second-order workflows.
 
 **What it demonstrates:**
-- Stable baseline usage (`triton_fused_meta_strict`):
-  - correctness mode: `FULL`
-  - practical mode: `FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-- How to run the default gate+frontier benchmark flow.
+- Stable delivery:
+  - correctness mode: `triton_fused_meta_strict FULL`
+  - practical mode:
+    `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- Accepted reporting baseline:
+  - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
+  - frontier tag: `phase12_stable_regression_20260309_155142`
+- Experimental path:
+  - `triton_fused_meta` with explicit opt-in only
+- Blocked R&D:
+  - CUDA-graph acceleration is not accepted and is not part of the recommended workflow
+  - even isolated attention-side QK capture currently fails in the repo capture-debug workflow
+  - no benchmark/regression commands should enable `CUDA_GRAPH_STATIC=1`
+- Eager-only benchmark guidance:
+  - recommended commands leave `CUDA_GRAPH_STATIC` unset
 - How to run/inspect the deterministic fused-meta canary.
-- Clear split between current deliverables and future work.
 
 Open in VSCode/Jupyter:
 ```bash
