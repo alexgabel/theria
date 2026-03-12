@@ -58,9 +58,9 @@ Stable delivery exit criteria:
 
 This is the canonical workflow page for the stable path.
 For the short colleague-facing summary, compact results table, and FAQ, see:
-`docs/phase12_for_colleagues.md`
+[`docs/phase12_for_colleagues.md`](../../docs/phase12_for_colleagues.md)
 For the compact review-facing table, see:
-`docs/phase12_results_snapshot.md`
+[`docs/phase12_results_snapshot.md`](../../docs/phase12_results_snapshot.md)
 
 ## Start here
 

@@ -68,15 +68,15 @@ Source of truth:
 - `experiments/phase12/phase12_stable_baseline.env`
 
 Canonical pages:
-- status: `docs/STATUS.md`
-- workflow: `experiments/phase12/README.md`
-- colleague summary: `docs/phase12_for_colleagues.md`
-- results snapshot: `docs/phase12_results_snapshot.md`
+- status: [`docs/STATUS.md`](STATUS.md)
+- workflow: [`experiments/phase12/README.md`](../experiments/phase12/README.md)
+- colleague summary: [`docs/phase12_for_colleagues.md`](phase12_for_colleagues.md)
+- results snapshot: [`docs/phase12_results_snapshot.md`](phase12_results_snapshot.md)
 
 Quick navigation:
-- use `docs/phase12_for_colleagues.md` for the short “what should I run?”
+- use [`docs/phase12_for_colleagues.md`](phase12_for_colleagues.md) for the short “what should I run?”
   summary, compact results table, and FAQ
-- use `experiments/phase12/README.md` for accepted commands and the stable
+- use [`experiments/phase12/README.md`](../experiments/phase12/README.md) for accepted commands and the stable
   regression workflow
 
 ## B. CUDA-Graph R&D

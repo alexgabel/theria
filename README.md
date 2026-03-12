@@ -38,18 +38,18 @@ The CLI flag `--fo` implements the classic first-order MAML approximation:
 
 See `theria/maml/loops.py::inner_adapt` and `docs/theory/maml_derivation.md` for the exact code/path.
 
-👉 **Canonical status & exit criteria:** `docs/STATUS.md`
+👉 **Canonical status & exit criteria:** [`docs/STATUS.md`](docs/STATUS.md)
 
-👉 **Phase 12 stable-path quickstart for colleagues:** `docs/phase12_for_colleagues.md`
+👉 **Phase 12 stable-path quickstart for colleagues:** [`docs/phase12_for_colleagues.md`](docs/phase12_for_colleagues.md)
 
-👉 **Phase 12 compact results snapshot:** `docs/phase12_results_snapshot.md`
+👉 **Phase 12 compact results snapshot:** [`docs/phase12_results_snapshot.md`](docs/phase12_results_snapshot.md)
 
 ## Phase 12 quick links
 
-- status: `docs/STATUS.md`
-- workflow: `experiments/phase12/README.md`
-- colleague summary: `docs/phase12_for_colleagues.md`
-- results snapshot: `docs/phase12_results_snapshot.md`
+- status: [`docs/STATUS.md`](docs/STATUS.md)
+- workflow: [`experiments/phase12/README.md`](experiments/phase12/README.md)
+- colleague summary: [`docs/phase12_for_colleagues.md`](docs/phase12_for_colleagues.md)
+- results snapshot: [`docs/phase12_results_snapshot.md`](docs/phase12_results_snapshot.md)
 
 ## Phase 12 FAQ
 

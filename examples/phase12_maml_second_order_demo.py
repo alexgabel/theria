@@ -13,9 +13,9 @@
 # This notebook is a lightweight companion to the accepted stable path.
 #
 # Canonical pages:
-# - status: `docs/STATUS.md`
-# - workflow: `experiments/phase12/README.md`
-# - colleague summary: `docs/phase12_for_colleagues.md`
+# - status: [`docs/STATUS.md`](../docs/STATUS.md)
+# - workflow: [`experiments/phase12/README.md`](../experiments/phase12/README.md)
+# - colleague summary: [`docs/phase12_for_colleagues.md`](../docs/phase12_for_colleagues.md)
 #
 # Accepted stable baseline:
 # - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
@@ -118,9 +118,10 @@ def print_failures(per_run_csv: Path, *, max_rows: int = 10) -> None:
 # ## 1) Environment check
 # Run this once from repo root. The notebook assumes `PYTHONPATH=.` and that
 # your CUDA env is ready (`conda activate theria-gpu` in shell before launch).
-# The canonical status page is `docs/STATUS.md`.
-# The canonical workflow page is `experiments/phase12/README.md`.
-# The shortest colleague-facing summary lives at `docs/phase12_for_colleagues.md`.
+# The canonical status page is [`docs/STATUS.md`](../docs/STATUS.md).
+# The canonical workflow page is [`experiments/phase12/README.md`](../experiments/phase12/README.md).
+# The shortest colleague-facing summary lives at
+# [`docs/phase12_for_colleagues.md`](../docs/phase12_for_colleagues.md).
 
 # %%
 print("Repo root:", REPO_ROOT)
@@ -247,9 +248,10 @@ else:
 # 5. Leave `CUDA_GRAPH_STATIC` unset
 #
 # ### What to share with colleagues
-# - Start with `docs/phase12_for_colleagues.md`
-# - Status and frozen baseline live in `docs/STATUS.md`
-# - Accepted workflow commands live in `experiments/phase12/README.md`
+# - Start with [`docs/phase12_for_colleagues.md`](../docs/phase12_for_colleagues.md)
+# - Status and frozen baseline live in [`docs/STATUS.md`](../docs/STATUS.md)
+# - Accepted workflow commands live in
+#   [`experiments/phase12/README.md`](../experiments/phase12/README.md)
 #
 # The colleague page carries the compact stable / practical / experimental /
 # blocked table and the FAQ. Keep that page as the short summary instead of

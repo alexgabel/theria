@@ -8,9 +8,9 @@ Accepted stable baseline:
 - frontier tag: `phase12_stable_regression_20260309_155142`
 
 Canonical pages:
-- status: `docs/STATUS.md`
-- workflow: `experiments/phase12/README.md`
-- results snapshot: `docs/phase12_results_snapshot.md`
+- status: [`docs/STATUS.md`](STATUS.md)
+- workflow: [`experiments/phase12/README.md`](../experiments/phase12/README.md)
+- results snapshot: [`docs/phase12_results_snapshot.md`](phase12_results_snapshot.md)
 
 ## Current paths
 
