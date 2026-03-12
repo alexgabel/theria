@@ -6,11 +6,246 @@ Backward is implemented in Python using standard matmul formulas to preserve
 autograd correctness while keeping the kernel minimal.
 """
 
+from __future__ import annotations
+
+import os
 import torch
 import triton
 import triton.language as tl
 from theria.attention.reference import reference_attention
-from theria.attention.triton_sdpa_backward import sdpa_bwd_dv, sdpa_bwd_dq, sdpa_bwd_dk
+from theria.attention.triton_sdpa_backward import (
+    debug_audit_fast_path,
+    sdpa_bwd_dv,
+    sdpa_bwd_dq,
+    sdpa_bwd_dk,
+)
+
+_TRITON_META_BWD_COUNTERS = {
+    "n_fast_bwd": 0,
+    "n_meta_bwd": 0,
+    "n_fallback_bwd": 0,
+    "fast_bwd_time_s": 0.0,
+    "meta_bwd_time_s": 0.0,
+    "meta_recompute_time_s": 0.0,
+    "fallback_bwd_time_s": 0.0,
+}
+_TRITON_SDPA_FWD_DEBUG_ARTIFACTS: dict[int, dict[str, object]] = {}
+_TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX = 0
+_TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = -1
+_TRITON_SDPA_FWD_DEBUG_MAX_ARTIFACTS = 256
+
+
+def reset_triton_meta_bwd_counters() -> None:
+    _TRITON_META_BWD_COUNTERS["n_fast_bwd"] = 0
+    _TRITON_META_BWD_COUNTERS["n_meta_bwd"] = 0
+    _TRITON_META_BWD_COUNTERS["n_fallback_bwd"] = 0
+    _TRITON_META_BWD_COUNTERS["fast_bwd_time_s"] = 0.0
+    _TRITON_META_BWD_COUNTERS["meta_bwd_time_s"] = 0.0
+    _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"] = 0.0
+    _TRITON_META_BWD_COUNTERS["fallback_bwd_time_s"] = 0.0
+
+
+def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, float]:
+    out = {
+        "n_fast_bwd": int(_TRITON_META_BWD_COUNTERS["n_fast_bwd"]),
+        "n_meta_bwd": int(_TRITON_META_BWD_COUNTERS["n_meta_bwd"]),
+        "n_fallback_bwd": int(_TRITON_META_BWD_COUNTERS["n_fallback_bwd"]),
+        "fast_bwd_time_s": float(_TRITON_META_BWD_COUNTERS["fast_bwd_time_s"]),
+        "meta_bwd_time_s": float(_TRITON_META_BWD_COUNTERS["meta_bwd_time_s"]),
+        "meta_recompute_time_s": float(
+            _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"]
+        ),
+        "fallback_bwd_time_s": float(
+            _TRITON_META_BWD_COUNTERS["fallback_bwd_time_s"]
+        ),
+    }
+    if reset:
+        reset_triton_meta_bwd_counters()
+    return out
+
+
+def _triton_sdpa_fwd_debug_enabled() -> bool:
+    return os.getenv("THERIA_TRITON_FWD_DEBUG", "0") == "1"
+
+
+def reset_triton_sdpa_fwd_debug_artifacts() -> None:
+    global _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX
+    global _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.clear()
+    _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX = 0
+    _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = -1
+
+
+def get_triton_sdpa_fwd_debug_artifact(
+    *,
+    call_index: int | None = None,
+    reset: bool = False,
+) -> dict[str, object]:
+    if call_index is None:
+        call_index = _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    out = dict(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS.get(int(call_index), {}))
+    if reset and call_index in _TRITON_SDPA_FWD_DEBUG_ARTIFACTS:
+        _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.pop(int(call_index), None)
+    return out
+
+
+def get_triton_sdpa_fwd_debug_last_call_index() -> int:
+    return int(_TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX)
+
+
+def _record_triton_sdpa_fwd_debug_artifact(
+    *,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    m: torch.Tensor,
+    l: torch.Tensor,
+    scale: float,
+) -> int:
+    global _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX
+    global _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX
+    if not _triton_sdpa_fwd_debug_enabled():
+        return -1
+    call_index = int(_TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX)
+    _TRITON_SDPA_FWD_DEBUG_NEXT_CALL_INDEX += 1
+    _TRITON_SDPA_FWD_DEBUG_LAST_CALL_INDEX = call_index
+    _TRITON_SDPA_FWD_DEBUG_ARTIFACTS[call_index] = {
+        "call_index": call_index,
+        "scale": float(scale),
+        "q_shape": tuple(int(x) for x in q.shape),
+        "k_shape": tuple(int(x) for x in k.shape),
+        "q_dtype_write": str(q.dtype),
+        "k_dtype_write": str(k.dtype),
+        "m_dtype_write": str(m.dtype),
+        "l_dtype_write": str(l.dtype),
+        "m": m.detach().cpu(),
+        "l": l.detach().cpu(),
+    }
+    while len(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS) > _TRITON_SDPA_FWD_DEBUG_MAX_ARTIFACTS:
+        oldest = next(iter(_TRITON_SDPA_FWD_DEBUG_ARTIFACTS))
+        _TRITON_SDPA_FWD_DEBUG_ARTIFACTS.pop(oldest, None)
+    return call_index
+
+
+def _meta_bwd_profile_enabled(grad_out: torch.Tensor) -> bool:
+    if os.getenv("THERIA_TRITON_META_PROFILE", "0") != "1":
+        return False
+    if not grad_out.is_cuda:
+        return False
+    return not torch.cuda.is_current_stream_capturing()
+
+
+def _cuda_elapsed_s(start_event: torch.cuda.Event, end_event: torch.cuda.Event) -> float:
+    end_event.record()
+    end_event.synchronize()
+    return float(start_event.elapsed_time(end_event) / 1000.0)
+
+
+def _meta_fallback_enabled() -> bool:
+    # Enabled by default so unstable fast backward can recover at runtime.
+    return os.getenv("THERIA_TRITON_META_ENABLE_FALLBACK", "1") == "1"
+
+
+def _first_nonfinite_name(named_tensors: tuple[tuple[str, torch.Tensor], ...]) -> str | None:
+    for name, tensor in named_tensors:
+        if not bool(torch.isfinite(tensor).all()):
+            return name
+    return None
+
+
+def _stable_recompute_sdpa(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    scale: float,
+) -> torch.Tensor:
+    # Keep recompute numerics explicit and fp32 for better stability.
+    qf = q.float()
+    kf = k.float()
+    vf = v.float()
+    scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale
+    scores = scores - scores.max(dim=-1, keepdim=True).values
+    probs = torch.exp(scores)
+    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    return torch.matmul(probs, vf)
+
+
+def _recompute_autograd_grads(
+    *,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    grad_out: torch.Tensor,
+    scale: float,
+    create_graph: bool,
+    profile_enabled: bool,
+    fallback_reason: str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if fallback_reason is not None:
+        _TRITON_META_BWD_COUNTERS["n_fallback_bwd"] += 1
+    _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+
+    bwd_start = bwd_end = None
+    if profile_enabled:
+        bwd_start = torch.cuda.Event(enable_timing=True)
+        bwd_end = torch.cuda.Event(enable_timing=True)
+        bwd_start.record()
+
+    q_ = q if q.requires_grad else q.detach().requires_grad_(True)
+    k_ = k if k.requires_grad else k.detach().requires_grad_(True)
+    v_ = v if v.requires_grad else v.detach().requires_grad_(True)
+
+    nonfinite_input = _first_nonfinite_name(
+        (("q", q_), ("k", k_), ("v", v_), ("grad_out", grad_out))
+    )
+    if nonfinite_input is not None:
+        prefix = "fallback_" if fallback_reason is not None else ""
+        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+        raise RuntimeError(f"NONFINITE {prefix}input[{nonfinite_input}] in_meta_recompute{suffix}")
+
+    recompute_start = recompute_end = None
+    if profile_enabled:
+        recompute_start = torch.cuda.Event(enable_timing=True)
+        recompute_end = torch.cuda.Event(enable_timing=True)
+        recompute_start.record()
+    with torch.enable_grad():
+        out = _stable_recompute_sdpa(q_, k_, v_, scale=scale)
+    if profile_enabled and recompute_start is not None and recompute_end is not None:
+        _TRITON_META_BWD_COUNTERS["meta_recompute_time_s"] += _cuda_elapsed_s(
+            recompute_start, recompute_end
+        )
+
+    nonfinite_out = _first_nonfinite_name((("out", out),))
+    if nonfinite_out is not None:
+        prefix = "fallback_" if fallback_reason is not None else ""
+        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+        raise RuntimeError(f"NONFINITE {prefix}recompute[{nonfinite_out}] in_meta_recompute{suffix}")
+
+    grad_q, grad_k, grad_v = torch.autograd.grad(
+        outputs=out,
+        inputs=(q_, k_, v_),
+        grad_outputs=grad_out.to(out.dtype),
+        # FULL-mode higher-order unrolls can revisit this subgraph.
+        retain_graph=bool(create_graph),
+        create_graph=create_graph,
+        allow_unused=False,
+    )
+
+    nonfinite_grad = _first_nonfinite_name(
+        (("dq", grad_q), ("dk", grad_k), ("dv", grad_v))
+    )
+    if nonfinite_grad is not None:
+        prefix = "fallback_" if fallback_reason is not None else ""
+        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+        raise RuntimeError(f"NONFINITE {prefix}grad[{nonfinite_grad}] in_meta_recompute{suffix}")
+
+    if profile_enabled and bwd_start is not None and bwd_end is not None:
+        elapsed = _cuda_elapsed_s(bwd_start, bwd_end)
+        _TRITON_META_BWD_COUNTERS["meta_bwd_time_s"] += elapsed
+        if fallback_reason is not None:
+            _TRITON_META_BWD_COUNTERS["fallback_bwd_time_s"] += elapsed
+
+    return grad_q, grad_k, grad_v
 
 
 @triton.autotune(
@@ -266,6 +501,7 @@ def _fused_sdpa_kernel(
     q_ptrs = Q + pid_bh * stride_qbh + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     q = tl.load(q_ptrs, mask=(offs_m[:, None] < Tq) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
     valid_m = offs_m < Tq
+    valid_m_f = valid_m.to(tl.float32)
 
     for n0 in range(0, Tk, BLOCK_N):
         k_ptrs = K + pid_bh * stride_kbh + (n0 + offs_n)[:, None] * stride_kn + offs_k[None, :] * stride_kk
@@ -273,28 +509,27 @@ def _fused_sdpa_kernel(
         k = tl.load(k_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_k[None, :] < D), other=0.0).to(tl.float32)
         v = tl.load(v_ptrs, mask=((n0 + offs_n)[:, None] < Tk) & (offs_dv[None, :] < Dv), other=0.0).to(tl.float32)
 
-        scores = tl.dot(q, tl.trans(k)) * scale  # (BLOCK_M, BLOCK_N)
+        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32, input_precision="ieee") * scale  # (BLOCK_M, BLOCK_N)
         valid_n = (n0 + offs_n) < Tk
         mask_mn = valid_m[:, None] & valid_n[None, :]
+        mask_mn_f = mask_mn.to(tl.float32)
         scores = tl.where(mask_mn, scores, -float("inf"))
 
         m_ij = tl.max(scores, axis=1)
-        m_new = tl.maximum(m_i, m_ij)
-        valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
-        m_new = tl.where(valid_m_slice, m_new, 0.0)
-        alpha = tl.exp(m_i - m_new)
-        p = tl.exp(scores - m_new[:, None])
+        m_candidate = tl.maximum(m_i, m_ij)
+        m_new = tl.where(valid_m, m_candidate, m_i)
+        alpha = tl.exp(tl.where(valid_m, m_i - m_new, 0.0)) * valid_m_f
+        p = tl.exp(tl.where(mask_mn, scores - m_new[:, None], -float("inf"))) * mask_mn_f
         l_new = l_i * alpha + tl.sum(p, axis=1)
-        acc = acc * alpha[:, None] + tl.dot(p, v)
+        acc = acc * alpha[:, None] + tl.dot(p, v, out_dtype=tl.float32, input_precision="ieee")
         m_i = m_new
         l_i = l_new
 
     # Normalize (guard against zero)
     eps = 1e-6
-    l_safe = tl.maximum(l_i, eps)
+    l_safe = tl.maximum(tl.where(valid_m, l_i, 1.0), eps)
     acc = acc / l_safe[:, None]
-    valid_m_slice = tl.max(valid_m[:, None].to(tl.int32), axis=1) != 0
-    acc = tl.where(valid_m_slice[:, None], acc, 0.0)
+    acc = tl.where(valid_m[:, None], acc, 0.0)
 
     out_ptrs = Out + pid_bh * stride_obh + offs_m[:, None] * stride_om + offs_dv[None, :] * stride_ok
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < Tq) & (offs_dv[None, :] < Dv))
@@ -363,6 +598,13 @@ def triton_sdpa_fused(q, k, v, return_stats: bool = False):
         BLOCK_D=BLOCK_D,
         BLOCK_DV=BLOCK_DV,
     )
+    _record_triton_sdpa_fwd_debug_artifact(
+        q=q,
+        k=k,
+        m=m_stats,
+        l=l_stats,
+        scale=1.0 / (D ** 0.5),
+    )
 
     if return_stats:
         return out, m_stats, l_stats
@@ -373,6 +615,7 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v):
         out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.forward_debug_call_index = get_triton_sdpa_fwd_debug_last_call_index()
         ctx.save_for_backward(q, k, v, m, l)
         return out
 
@@ -389,6 +632,157 @@ class TritonFusedSDPAFunction(torch.autograd.Function):
 
 def triton_sdpa_fused_autograd(q, k, v):
     return TritonFusedSDPAFunction.apply(q, k, v)
+
+
+class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v):
+        """
+        Meta-safe hybrid path:
+        - Forward: Triton fused SDPA.
+        - Backward:
+          - fast Triton backward when higher-order graph construction is not needed
+          - autograd-recompute backward when create_graph=True so gradgrad through
+            attention uses full softmax curvature.
+        """
+        out, m, l = triton_sdpa_fused(q, k, v, return_stats=True)
+        ctx.forward_debug_call_index = get_triton_sdpa_fwd_debug_last_call_index()
+        ctx.save_for_backward(q, k, v, m, l)
+        ctx.scale = 1.0 / (q.shape[-1] ** 0.5)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v, m, l = ctx.saved_tensors
+        scale = ctx.scale
+        force_autograd = os.getenv("THERIA_TRITON_META_FORCE_AUTOGRAD_BWD", "0") == "1"
+        # Explicit trigger: use meta-safe path only when the backward itself is
+        # being tracked (create_graph=True) or when force-enabled by env flag.
+        use_autograd_recompute = force_autograd or bool(getattr(grad_out, "requires_grad", False))
+        fallback_enabled = _meta_fallback_enabled()
+        profile_enabled = _meta_bwd_profile_enabled(grad_out)
+        if not use_autograd_recompute:
+            debug_audit_fast_path(
+                q,
+                k,
+                v,
+                grad_out,
+                m,
+                l,
+                scale,
+                context="fast_path",
+                forward_debug_call_index=getattr(ctx, "forward_debug_call_index", -1),
+                m_dtype_read=str(m.dtype),
+                l_dtype_read=str(l.dtype),
+            )
+            nonfinite_fast_input = _first_nonfinite_name(
+                (("q", q), ("k", k), ("v", v), ("m", m), ("l", l), ("grad_out", grad_out))
+            )
+            if nonfinite_fast_input is not None:
+                if not fallback_enabled:
+                    raise RuntimeError(
+                        f"NONFINITE fast_input[{nonfinite_fast_input}] in_triton_fused_meta"
+                    )
+                return _recompute_autograd_grads(
+                    q=q,
+                    k=k,
+                    v=v,
+                    grad_out=grad_out,
+                    scale=scale,
+                    create_graph=False,
+                    profile_enabled=profile_enabled,
+                    fallback_reason=f"nonfinite_fast_input[{nonfinite_fast_input}]",
+                )
+            _TRITON_META_BWD_COUNTERS["n_fast_bwd"] += 1
+            fast_start = fast_end = None
+            if profile_enabled:
+                fast_start = torch.cuda.Event(enable_timing=True)
+                fast_end = torch.cuda.Event(enable_timing=True)
+                fast_start.record()
+            dq = sdpa_bwd_dq(q, k, v, grad_out, m, l, scale)
+            dk = sdpa_bwd_dk(q, k, v, grad_out, m, l, scale)
+            dv = sdpa_bwd_dv(q, k, grad_out, m, l, scale)
+            if profile_enabled and fast_start is not None and fast_end is not None:
+                _TRITON_META_BWD_COUNTERS["fast_bwd_time_s"] += _cuda_elapsed_s(
+                    fast_start, fast_end
+                )
+            nonfinite_fast_grad = _first_nonfinite_name(
+                (("dq", dq), ("dk", dk), ("dv", dv))
+            )
+            if nonfinite_fast_grad is None:
+                return dq, dk, dv
+            if not fallback_enabled:
+                raise RuntimeError(
+                    f"NONFINITE fast_grad[{nonfinite_fast_grad}] in_triton_fused_meta"
+                )
+            return _recompute_autograd_grads(
+                q=q,
+                k=k,
+                v=v,
+                grad_out=grad_out,
+                scale=scale,
+                create_graph=False,
+                profile_enabled=profile_enabled,
+                fallback_reason=f"nonfinite_fast_grad[{nonfinite_fast_grad}]",
+            )
+
+        return _recompute_autograd_grads(
+            q=q,
+            k=k,
+            v=v,
+            grad_out=grad_out,
+            scale=scale,
+            create_graph=True,
+            profile_enabled=profile_enabled,
+            fallback_reason=None,
+        )
+
+
+def triton_sdpa_fused_autograd_meta(q, k, v):
+    """
+    Triton forward + hybrid backward:
+      fast first-order path, autograd-safe path under create_graph=True.
+    """
+    return TritonFusedSDPAFunctionMeta.apply(q, k, v)
+
+
+class TritonFusedSDPAFunctionFullAutograd(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v):
+        """
+        Forward: Triton fused SDPA.
+        Backward: recompute in PyTorch with create_graph=True to allow double backward.
+        This yields full softmax curvature but is not performance-optimized.
+        """
+        assert q.is_cuda and k.is_cuda and v.is_cuda, "TritonFusedSDPAFunctionFullAutograd requires CUDA tensors"
+        out = triton_sdpa_fused(q, k, v, return_stats=False)
+        ctx.save_for_backward(q, k, v)
+        ctx.scale = 1.0 / (q.shape[-1] ** 0.5)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        q, k, v = ctx.saved_tensors
+        scale = ctx.scale
+        profile_enabled = _meta_bwd_profile_enabled(grad_out)
+        return _recompute_autograd_grads(
+            q=q,
+            k=k,
+            v=v,
+            grad_out=grad_out,
+            scale=scale,
+            create_graph=True,
+            profile_enabled=profile_enabled,
+            fallback_reason=None,
+        )
+
+
+def triton_sdpa_fused_autograd_full(q, k, v):
+    """
+    Triton forward + autograd-in-backward (full curvature).
+    Intended for correctness experiments, not speed.
+    """
+    return TritonFusedSDPAFunctionFullAutograd.apply(q, k, v)
 
 
 @triton.autotune(

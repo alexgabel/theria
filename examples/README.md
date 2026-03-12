@@ -4,6 +4,32 @@ This directory contains example scripts demonstrating how to use theria's attent
 
 ## Available Examples
 
+### [phase12_maml_second_order_demo.ipynb](phase12_maml_second_order_demo.ipynb)
+
+A one-stop notebook demo for Phase-12 MAML second-order workflows.
+
+Short summary:
+- stable path: `triton_fused_meta_strict FULL`
+- practical path:
+  `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- `triton_fused_meta` remains experimental
+- CUDA-graph acceleration is blocked and not part of the recommended workflow
+
+Canonical pages:
+- colleague summary: [`../docs/phase12_for_colleagues.md`](../docs/phase12_for_colleagues.md)
+- status: [`../docs/STATUS.md`](../docs/STATUS.md)
+- workflow: [`../experiments/phase12/README.md`](../experiments/phase12/README.md)
+
+Open in VSCode/Jupyter:
+```bash
+code examples/phase12_maml_second_order_demo.ipynb
+```
+
+Source-tracked paired file:
+- [`phase12_maml_second_order_demo.py`](phase12_maml_second_order_demo.py)
+
+---
+
 ### [minimal_decoder_transformer.py](minimal_decoder_transformer.py)
 
 A complete, runnable example of a decoder-only transformer using theria's fully fused attention.

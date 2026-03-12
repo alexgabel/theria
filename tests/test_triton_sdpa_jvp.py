@@ -1,3 +1,4 @@
+import os
 import pytest
 import torch
 
@@ -16,6 +17,7 @@ from theria.attention.reference_jvp_sdpa import sdpa_jvp_reference
     ],
 )
 def test_triton_sdpa_jvp_matches_reference(shape):
+    os.environ["THERIA_TRITON_JVP_HVP"] = "1"
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 

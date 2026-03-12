@@ -69,6 +69,16 @@ class Phase10TinyAttentionModel(nn.Module):
     def _resolve_backend(self) -> str:
         if self.backend == "triton_fused":
             return "triton_full_fused"
+        if self.backend == "triton_fused_meta":
+            return "triton_fused_meta"
+        if self.backend == "triton_fused_meta_strict":
+            return "triton_fused_meta_strict"
+        if self.backend == "triton_full_autograd":
+            return "triton_full_autograd"
+        if self.backend == "triton_frozen_stats":
+            return "triton_frozen_stats"
+        if self.backend == "reference_frozen_stats":
+            return "reference_frozen_stats"
         return self.backend
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -89,7 +99,16 @@ class Phase10TinyAttentionModel(nn.Module):
 
 def set_attention_backend(model: Phase10TinyAttentionModel, backend: str):
     """Switch attention backend in the model."""
-    if backend not in {"reference", "custom", "triton_fused"}:
+    if backend not in {
+        "reference",
+        "custom",
+        "triton_fused",
+        "triton_fused_meta",
+        "triton_fused_meta_strict",
+        "triton_full_autograd",
+        "triton_frozen_stats",
+        "reference_frozen_stats",
+    }:
         raise ValueError(f"Unknown backend: {backend}")
     model.set_attention_backend(backend)
 
@@ -376,7 +395,16 @@ def run_bench(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", type=str, required=True,
-                        choices=["reference", "custom", "triton_fused"])
+                        choices=[
+                            "reference",
+                            "custom",
+                            "triton_fused",
+                            "triton_fused_meta",
+                            "triton_fused_meta_strict",
+                            "triton_full_autograd",
+                            "triton_frozen_stats",
+                            "reference_frozen_stats",
+                        ])
     parser.add_argument("--fo", action="store_true",
                         help="Use first-order MAML (FO-MAML)")
     parser.add_argument("--fo-strict", action="store_true",
