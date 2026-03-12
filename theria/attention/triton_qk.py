@@ -159,14 +159,13 @@ def _stable_recompute_sdpa(
     *,
     scale: float,
 ) -> torch.Tensor:
-    # Keep recompute numerics explicit and fp32 for better stability.
+    # Keep recompute numerics explicit and fp32 for stability while staying as
+    # close as possible to the compact reference graph used for strict runs.
     qf = q.float()
     kf = k.float()
     vf = v.float()
     scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale
-    scores = scores - scores.max(dim=-1, keepdim=True).values
-    probs = torch.exp(scores)
-    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    probs = torch.softmax(scores, dim=-1)
     return torch.matmul(probs, vf)
 
 
