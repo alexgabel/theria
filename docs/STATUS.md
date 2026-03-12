@@ -15,7 +15,7 @@ status is reported with named tracks:
 
 ## Current product baselines
 
-- Stable correctness baseline:
+- Stable baseline:
   - `triton_fused_meta_strict FULL`
 - Stable practical baseline:
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
@@ -38,9 +38,9 @@ Accepted stable baseline on 2026-03-09:
 - frontier tag: `phase12_stable_regression_20260309_155142`
 
 Accepted recommendations:
-- correctness-sensitive:
+- stable:
   - `triton_fused_meta_strict FULL`
-- wall-clock-sensitive:
+- practical:
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
 
 Stable delivery invariants:
@@ -70,31 +70,14 @@ Source of truth:
 Canonical pages:
 - status: `docs/STATUS.md`
 - workflow: `experiments/phase12/README.md`
+- colleague summary: `docs/phase12_for_colleagues.md`
+- results snapshot: `docs/phase12_results_snapshot.md`
 
-Start here:
-
-```bash
-# Correctness-sensitive use
-PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
-  --backend triton_fused_meta_strict \
-  --mode FULL \
-  --device cuda
-
-# Wall-clock-sensitive use
-PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
-  --backend triton_fused_meta_strict \
-  --mode FULL_HYBRID \
-  --meta-every-n-outer 8 \
-  --meta-last-n-inner 2 \
-  --device cuda
-```
-
-Contributor checklist for stable-path changes:
-1. run `python experiments/phase12/scripts/show_phase12_stable_baseline.py`
-2. run `bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh`
-3. confirm equal-step `FULL` semantics still pass
-4. confirm equal-time `FULL_HYBRID` remains on the FO frontier
-5. leave `CUDA_GRAPH_STATIC` unset
+Quick navigation:
+- use `docs/phase12_for_colleagues.md` for the short “what should I run?”
+  summary, compact results table, and FAQ
+- use `experiments/phase12/README.md` for accepted commands and the stable
+  regression workflow
 
 ## B. CUDA-Graph R&D
 
@@ -130,6 +113,21 @@ Until those are met:
 ## C. Experimental Backend Promotion
 
 Current status: not promoted.
+
+Current decision:
+- `triton_fused_meta` remains experimental.
+- Stable recommendation unchanged:
+  - `triton_fused_meta_strict FULL`
+  - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+
+Latest failed promotion reference:
+- `phase12_requalify_diffproxy_s2_20260306_122210`
+
+Why promotion is parked:
+- the last qualification already showed exact equal-step parity
+- the remaining gap was equal-time competitiveness, not correctness
+- no concrete fused-meta change has since been identified that should
+  materially improve equal-time behavior
 
 Promotion criteria remain:
 - fallback-free

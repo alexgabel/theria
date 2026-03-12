@@ -5,7 +5,7 @@ attention backends.
 
 ## Frozen product baselines
 
-- Stable correctness baseline:
+- Stable baseline:
   - backend: `triton_fused_meta_strict`
   - mode: `FULL`
 - Stable practical baseline:
@@ -22,9 +22,9 @@ Accepted stable baseline (2026-03-09):
 - frontier tag: `phase12_stable_regression_20260309_155142`
 
 Accepted recommendations:
-- correctness-sensitive:
+- stable:
   - `triton_fused_meta_strict FULL`
-- wall-clock-sensitive:
+- practical:
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
 
 Stable delivery invariants:
@@ -57,19 +57,26 @@ Stable delivery exit criteria:
 - no misleading CUDA-graph-ready or universal equal-time-win claims remain
 
 This is the canonical workflow page for the stable path.
+For the short colleague-facing summary, compact results table, and FAQ, see:
+`docs/phase12_for_colleagues.md`
+For the compact review-facing table, see:
+`docs/phase12_results_snapshot.md`
 
 ## Start here
 
 Copy-paste commands for the accepted eager path:
 
+Eager path only: leave `CUDA_GRAPH_STATIC` unset for all recommended benchmark
+and regression commands.
+
 ```bash
-# Correctness-sensitive use
+# Stable use
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
   --backend triton_fused_meta_strict \
   --mode FULL \
   --device cuda
 
-# Wall-clock-sensitive use
+# Practical use
 PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
   --backend triton_fused_meta_strict \
   --mode FULL_HYBRID \
@@ -118,6 +125,21 @@ Until then:
 ## C. Experimental Backend Promotion
 
 Current status: not promoted.
+
+Current decision:
+- `triton_fused_meta` remains experimental.
+- Stable recommendation unchanged:
+  - `triton_fused_meta_strict FULL`
+  - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+
+Latest failed promotion reference:
+- `phase12_requalify_diffproxy_s2_20260306_122210`
+
+Why promotion is parked:
+- the last qualification already showed exact equal-step parity
+- the remaining gap was equal-time competitiveness, not correctness
+- no concrete fused-meta change has since been identified that should
+  materially improve equal-time behavior
 
 Promotion criteria:
 - fallback-free
@@ -199,6 +221,21 @@ Stable optimization regression loop after each optimization batch:
 
 ```bash
 bash experiments/phase12/scripts/run_phase12_stable_frontier_regression.sh
+```
+
+One-command stable demo flow:
+
+```bash
+bash experiments/phase12/scripts/run_phase12_stable_demo.sh
+```
+
+Alias layer from repo root:
+
+```bash
+make phase12-stable-full
+make phase12-stable-hybrid
+make phase12-stable-demo
+make phase12-stable-regress
 ```
 
 This enforces:

@@ -10,33 +10,23 @@
 # %% [markdown]
 # # Phase 12 MAML 2nd-Order Demo (Theria)
 #
-# This notebook is a one-stop demo for colleagues who want to use the current
-# Phase-12 stack for MAML with second-order attention gradients.
+# This notebook is a lightweight companion to the accepted stable path.
 #
-# ## A. Stable delivery
-# - Accepted stable baseline:
-#   - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
-#   - frontier tag: `phase12_stable_regression_20260309_155142`
-# - Correctness-sensitive recommendation:
-#   - `triton_fused_meta_strict FULL`
-# - Wall-clock-sensitive recommendation:
-#   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-# - Recommended benchmark and regression commands are eager-only.
+# Canonical pages:
+# - status: `docs/STATUS.md`
+# - workflow: `experiments/phase12/README.md`
+# - colleague summary: `docs/phase12_for_colleagues.md`
 #
-# ## B. Experimental / blocked work
-# - `triton_fused_meta` is still experimental and requires explicit opt-in.
-# - CUDA-graph acceleration is blocked in the attention capture path and is not
-#   part of the recommended workflow.
-# - Even isolated attention-side QK capture currently fails in the repo
-#   capture-debug workflow.
-# - Do not use `CUDA_GRAPH_STATIC=1` in benchmark or regression commands.
-# - Do not treat equal-step parity alone as promotion evidence for
-#   `triton_fused_meta`.
+# Accepted stable baseline:
+# - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
+# - frontier tag: `phase12_stable_regression_20260309_155142`
 #
-# ## Contributor note
-# - Stable path is accepted on eager execution.
-# - CUDA-graph work is isolated R&D.
-# - Experimental fused-meta is not the default.
+# Supported recommendations:
+# - stable: `triton_fused_meta_strict FULL`
+# - practical:
+#   `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+#
+# Keep the recommended path eager-only. Leave `CUDA_GRAPH_STATIC` unset.
 
 # %%
 from __future__ import annotations
@@ -130,6 +120,7 @@ def print_failures(per_run_csv: Path, *, max_rows: int = 10) -> None:
 # your CUDA env is ready (`conda activate theria-gpu` in shell before launch).
 # The canonical status page is `docs/STATUS.md`.
 # The canonical workflow page is `experiments/phase12/README.md`.
+# The shortest colleague-facing summary lives at `docs/phase12_for_colleagues.md`.
 
 # %%
 print("Repo root:", REPO_ROOT)
@@ -141,19 +132,22 @@ print("Python:", sys.executable)
 # Copy-paste commands for the current supported modes:
 #
 # ```bash
-# # Correctness-sensitive use
+# # Stable use
 # PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
 #   --backend triton_fused_meta_strict \
 #   --mode FULL \
 #   --device cuda
 #
-# # Wall-clock-sensitive use
+# # Practical use
 # PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
 #   --backend triton_fused_meta_strict \
 #   --mode FULL_HYBRID \
 #   --meta-every-n-outer 8 \
 #   --meta-last-n-inner 2 \
 #   --device cuda
+# 
+# # Small accepted demo flow
+# bash experiments/phase12/scripts/run_phase12_stable_demo.sh
 # ```
 #
 # ## 3) Recommended default benchmark flow (stable baseline, eager only)
@@ -252,29 +246,11 @@ else:
 # 4. Confirm equal-time `FULL_HYBRID` remains on the FO frontier
 # 5. Leave `CUDA_GRAPH_STATIC` unset
 #
-# ### Recommended usage now
-# - Correctness-sensitive FULL runs:
-#   - backend: `triton_fused_meta_strict`
-#   - mode: `FULL`
-# - Practical budget-aware runs:
-#   - backend: `triton_fused_meta_strict`
-#   - mode: `FULL_HYBRID`
-#   - `meta_every_n_outer=8`
-#   - `meta_last_n_inner=2`
+# ### What to share with colleagues
+# - Start with `docs/phase12_for_colleagues.md`
+# - Status and frozen baseline live in `docs/STATUS.md`
+# - Accepted workflow commands live in `experiments/phase12/README.md`
 #
-# ### Experimental path
-# - `triton_fused_meta` requires explicit opt-in:
-#   - shell env: `ALLOW_EXPERIMENTAL_BACKENDS=1`
-#   - CLI flag: `--allow-experimental-backends`
-#
-# ### Blocked work
-# - CUDA-graph acceleration is not accepted and should stay off the benchmark path.
-# - Do not set `CUDA_GRAPH_STATIC=1` in recommended benchmark/regression commands.
-# - If CUDA-graph work resumes, start from the isolated capture-debug repro, not
-#   from the frontier runners.
-#
-# ### Reporting checklist
-# - Stable: `triton_fused_meta_strict FULL`
-# - Practical: `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-# - Experimental: `triton_fused_meta`
-# - Blocked: CUDA-graph acceleration for the stable practical path
+# The colleague page carries the compact stable / practical / experimental /
+# blocked table and the FAQ. Keep that page as the short summary instead of
+# duplicating it here.

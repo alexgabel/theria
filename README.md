@@ -50,6 +50,23 @@ See `theria/maml/loops.py::inner_adapt` and `docs/theory/maml_derivation.md` for
 
 👉 **Canonical status & exit criteria:** `docs/STATUS.md`
 
+👉 **Phase 12 stable-path quickstart for colleagues:** `docs/phase12_for_colleagues.md`
+
+👉 **Phase 12 compact results snapshot:** `docs/phase12_results_snapshot.md`
+
+## Phase 12 quick links
+
+- status: `docs/STATUS.md`
+- workflow: `experiments/phase12/README.md`
+- colleague summary: `docs/phase12_for_colleagues.md`
+- results snapshot: `docs/phase12_results_snapshot.md`
+
+## Phase 12 FAQ
+
+- **Stable:** `triton_fused_meta_strict FULL` on eager execution
+- **Experimental:** `triton_fused_meta` remains opt-in only
+- **Blocked:** CUDA-graph acceleration for the stable practical path; use the eager path and see the linked docs for detail
+
 ---
 
 ## Repository layout (important parts only)

@@ -8,40 +8,17 @@ This directory contains example scripts demonstrating how to use theria's attent
 
 A one-stop notebook demo for Phase-12 MAML second-order workflows.
 
-**What it demonstrates:**
-- Stable delivery:
-  - correctness mode: `triton_fused_meta_strict FULL`
-  - practical mode:
-    `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-- Accepted reporting baseline:
-  - gate tag: `phase12_meta_gate_phase12_stable_regression_20260309_155142`
-  - frontier tag: `phase12_stable_regression_20260309_155142`
-- Experimental path:
-  - `triton_fused_meta` with explicit opt-in only
-- Blocked R&D:
-  - CUDA-graph acceleration is not accepted and is not part of the recommended workflow
-  - even isolated attention-side QK capture currently fails in the repo capture-debug workflow
-  - no benchmark/regression commands should enable `CUDA_GRAPH_STATIC=1`
-- Eager-only benchmark guidance:
-  - recommended commands leave `CUDA_GRAPH_STATIC` unset
-- How to run/inspect the deterministic fused-meta canary.
+Short summary:
+- stable path: `triton_fused_meta_strict FULL`
+- practical path:
+  `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- `triton_fused_meta` remains experimental
+- CUDA-graph acceleration is blocked and not part of the recommended workflow
 
-Quick start:
-```bash
-# Correctness-sensitive use
-PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
-  --backend triton_fused_meta_strict \
-  --mode FULL \
-  --device cuda
-
-# Wall-clock-sensitive use
-PYTHONPATH=. python experiments/phase12/scripts/run_phase12_behavior.py \
-  --backend triton_fused_meta_strict \
-  --mode FULL_HYBRID \
-  --meta-every-n-outer 8 \
-  --meta-last-n-inner 2 \
-  --device cuda
-```
+Canonical pages:
+- colleague summary: [`../docs/phase12_for_colleagues.md`](../docs/phase12_for_colleagues.md)
+- status: [`../docs/STATUS.md`](../docs/STATUS.md)
+- workflow: [`../experiments/phase12/README.md`](../experiments/phase12/README.md)
 
 Open in VSCode/Jupyter:
 ```bash
