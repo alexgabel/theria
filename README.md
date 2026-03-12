@@ -29,16 +29,6 @@ theria explores how to:
 
 ## Project status (TL;DR)
 
-- **Phase 9: COMPLETE**
-  - Explicit Triton backward (dQ, dK, dV)
-  - Frozen-stats JVP
-  - HVP sanity via finite differences
-  - GPU correctness locked by tests
-- **Phase 10: IN PROGRESS**
-  - Meta-learning (MAML) experiments
-  - Empirical study of higher-order failure modes
-  - Comparison: full MAML vs FO-MAML under different attention backends
-
 ### FO-MAML semantics (theria definition)
 
 The CLI flag `--fo` implements the classic first-order MAML approximation:
