@@ -145,6 +145,17 @@ def _meta_fallback_enabled() -> bool:
     return os.getenv("THERIA_TRITON_META_ENABLE_FALLBACK", "1") == "1"
 
 
+def _meta_runtime_finite_guards_enabled() -> bool:
+    override = os.getenv("THERIA_TRITON_META_FINITE_GUARDS")
+    if override is not None:
+        return override == "1"
+    # Keep runtime finite scans on when fallback is active so the experimental
+    # path can still self-detect bad values and recover. When fallback is
+    # explicitly disabled for promotion profiling, skip the scans and let the
+    # canary/regression harnesses own stability validation.
+    return _meta_fallback_enabled()
+
+
 def _first_nonfinite_name(named_tensors: tuple[tuple[str, torch.Tensor], ...]) -> str | None:
     for name, tensor in named_tensors:
         if not bool(torch.isfinite(tensor).all()):
@@ -183,6 +194,7 @@ def _recompute_autograd_grads(
     if fallback_reason is not None:
         _TRITON_META_BWD_COUNTERS["n_fallback_bwd"] += 1
     _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+    finite_guards_enabled = _meta_runtime_finite_guards_enabled()
 
     bwd_start = bwd_end = None
     if profile_enabled:
@@ -194,13 +206,14 @@ def _recompute_autograd_grads(
     k_ = k if k.requires_grad else k.detach().requires_grad_(True)
     v_ = v if v.requires_grad else v.detach().requires_grad_(True)
 
-    nonfinite_input = _first_nonfinite_name(
-        (("q", q_), ("k", k_), ("v", v_), ("grad_out", grad_out))
-    )
-    if nonfinite_input is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}input[{nonfinite_input}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_input = _first_nonfinite_name(
+            (("q", q_), ("k", k_), ("v", v_), ("grad_out", grad_out))
+        )
+        if nonfinite_input is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}input[{nonfinite_input}] in_meta_recompute{suffix}")
 
     recompute_start = recompute_end = None
     if profile_enabled:
@@ -214,11 +227,12 @@ def _recompute_autograd_grads(
             recompute_start, recompute_end
         )
 
-    nonfinite_out = _first_nonfinite_name((("out", out),))
-    if nonfinite_out is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}recompute[{nonfinite_out}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_out = _first_nonfinite_name((("out", out),))
+        if nonfinite_out is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}recompute[{nonfinite_out}] in_meta_recompute{suffix}")
 
     grad_q, grad_k, grad_v = torch.autograd.grad(
         outputs=out,
@@ -230,13 +244,14 @@ def _recompute_autograd_grads(
         allow_unused=False,
     )
 
-    nonfinite_grad = _first_nonfinite_name(
-        (("dq", grad_q), ("dk", grad_k), ("dv", grad_v))
-    )
-    if nonfinite_grad is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}grad[{nonfinite_grad}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_grad = _first_nonfinite_name(
+            (("dq", grad_q), ("dk", grad_k), ("dv", grad_v))
+        )
+        if nonfinite_grad is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}grad[{nonfinite_grad}] in_meta_recompute{suffix}")
 
     if profile_enabled and bwd_start is not None and bwd_end is not None:
         elapsed = _cuda_elapsed_s(bwd_start, bwd_end)

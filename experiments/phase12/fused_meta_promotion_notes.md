@@ -73,3 +73,16 @@ Next bounded optimization batch:
 - switch focus to `support_grad_create_graph`
 - target experimental-path higher-order support-grad overhead only
 - keep fallback disabled, parity intact, and qualification out of scope
+
+Current bounded optimization batch:
+- hypothesis: unconditional runtime finite scans in the experimental
+  recompute/meta-grad path are inflating `support_grad_create_graph` overhead
+  during promotion profiling
+- implementation target: keep those scans enabled when fallback is active, but
+  skip them by default when fallback is explicitly disabled for promotion
+  profiling/regression
+
+Decision rule for this batch:
+- if `support_grad_create_graph` premium drops materially without stability
+  regressions, continue on this line
+- if it barely moves, stop and choose a new hypothesis
