@@ -17,6 +17,15 @@ Current branch charter:
 - do not touch CUDA-graph work
 - do not change the accepted stable baseline
 
+Current branch outcome:
+- status: promotion path active
+- conservative defaults unchanged:
+  - `triton_fused_meta_strict FULL`
+  - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- `triton_fused_meta` is now a promoted experimental candidate for the target
+  diffusion-like workload, especially when equal-time performance matters
+- this is not a claim of universal replacement or a win on every cell
+
 Current bounded optimization batch:
 - hypothesis: reduce fused-meta `meta_bwd` overhead by simplifying the
   recompute graph used in `triton_fused_meta` higher-order backward
@@ -86,3 +95,80 @@ Decision rule for this batch:
 - if `support_grad_create_graph` premium drops materially without stability
   regressions, continue on this line
 - if it barely moves, stop and choose a new hypothesis
+
+Observed outcome for the current batch:
+- canary: pass (`phase12_fused_meta_canary_20260312_170726`)
+- regression: pass (`phase12_fused_meta_regression_20260312_171556`)
+- profiling: strong win; `support_grad_create_graph` and `meta_bwd` premiums
+  both dropped materially while parity stayed exact
+- branch decision: reopen promotion with 2-seed qualification
+
+Latest promotion result:
+- 5-seed qualification completed:
+  - gate tag: `phase12_meta_gate_phase12_requalify_diffproxy_s5_20260313_084040`
+  - frontier tag: `phase12_requalify_diffproxy_s5_20260313_084040`
+- outcome:
+  - fallback-free
+  - stable across seeds
+  - exact equal-step parity
+  - equal-time still not strong enough for promotion
+- branch decision: keep `triton_fused_meta` experimental and continue one more
+  bounded optimization cycle focused on the worst equal-time gaps:
+  `FULL k=2/5` and `FULL_HYBRID k=2`
+
+Promotion requalification outcome after the final bounded batch:
+- 2-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_requalify_diffproxy_s2_20260313_153202`
+  - frontier tag: `phase12_requalify_diffproxy_s2_20260313_153202`
+- 5-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_requalify_diffproxy_s5_20260313_175213`
+  - frontier tag: `phase12_requalify_diffproxy_s5_20260313_175213`
+- outcome:
+  - fallback-free
+  - stable across 5 seeds
+  - exact equal-step parity
+  - equal-time competitive or better on the target diffusion-like workload
+- branch decision: promotion path active
+- caveat:
+  - this is still not a claim that `triton_fused_meta` wins every cell or is a
+    universal replacement
+  - `FULL k=2` still trails `triton_fused_meta_strict`
+  - run one held-out diffusion-like variant or shape before changing any
+    default recommendation globally
+
+Current bounded optimization batch:
+- hypothesis: per-call CUDA event synchronization in the experimental-path
+  meta/fast backward profiling is inflating the measured equal-time premium in
+  official qualification runs, especially on `FULL k=2/5` and
+  `FULL_HYBRID k=2`
+- implementation target: keep profile counters, but accumulate CUDA event pairs
+  lazily and flush them once when counters are read, instead of synchronizing
+  on every profiled backward/recompute call
+
+Decision rule for this batch:
+- if the worst-cell step-time premiums move materially and stability/parity stay
+  clean, consider one more promotion requalification
+- if the premiums barely move, stop this line and park promotion again
+
+Observed outcome for the current batch:
+- canary: pass (`phase12_fused_meta_canary_20260313_121342`)
+- regression: pass (`phase12_fused_meta_regression_20260313_121915`)
+- profiling: wrong direction; the worst-cell premiums increased, especially on
+  `FULL k=2/5` and `FULL_HYBRID k=2`
+- branch decision: revert the lazy-event profiling batch and stop this line
+
+Current bounded optimization batch:
+- hypothesis: the experimental recompute/meta-grad path is still adding
+  avoidable overhead on no-graph support-grad steps, especially in the short
+  inner-step regimes that dominate the remaining equal-time gap
+- implementation target: focus on `support_grad_no_graph` only and leave the
+  `meta_bwd`/profiling path unchanged
+- concrete change: gate the fast-path finite scans on `q/k/v/m/l/grad_out` and
+  `dq/dk/dv` the same way the recompute finite scans were gated earlier:
+  enabled when fallback is active, skipped by default when fallback is
+  explicitly disabled for promotion profiling
+
+Decision rule for this batch:
+- if `support_grad_no_graph` premium drops materially without stability or
+  parity regressions, consider one more promotion requalification
+- if it barely moves, park promotion again

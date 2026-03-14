@@ -11,7 +11,8 @@ status is reported with named tracks:
 
 - **A. Stable Delivery** — accepted on eager execution
 - **B. CUDA-Graph R&D** — blocked, isolated from benchmark/regression workflows
-- **C. Experimental Backend Promotion** — active research, not the default path
+- **C. Experimental Backend Promotion** — promotion candidate on the target
+  diffusion-like workload, not the default path
 
 ## Current product baselines
 
@@ -19,7 +20,7 @@ status is reported with named tracks:
   - `triton_fused_meta_strict FULL`
 - Stable practical baseline:
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-- Experimental backend only:
+- Promoted experimental candidate:
   - `triton_fused_meta`
 
 Current policy:
@@ -112,22 +113,27 @@ Until those are met:
 
 ## C. Experimental Backend Promotion
 
-Current status: not promoted.
+Current status: promotion path active, but not the default path.
 
 Current decision:
-- `triton_fused_meta` remains experimental.
-- Stable recommendation unchanged:
+- Keep the conservative defaults unchanged:
   - `triton_fused_meta_strict FULL`
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- Treat `triton_fused_meta` as a promoted experimental candidate for the
+  target diffusion-like workload, especially when equal-time performance
+  matters.
 
-Latest failed promotion reference:
-- `phase12_requalify_diffproxy_s2_20260306_122210`
+Latest successful promotion references:
+- 2-seed:
+  - `phase12_requalify_diffproxy_s2_20260313_153202`
+- 5-seed:
+  - `phase12_requalify_diffproxy_s5_20260313_175213`
 
-Why promotion is parked:
-- the last qualification already showed exact equal-step parity
-- the remaining gap was equal-time competitiveness, not correctness
-- no concrete fused-meta change has since been identified that should
-  materially improve equal-time behavior
+Why promotion is active:
+- fallback-free
+- stable across 5 seeds
+- contract/equal-step parity preserved
+- equal-time competitive or better on the target diffusion-like workload
 
 Promotion criteria remain:
 - fallback-free
@@ -136,18 +142,20 @@ Promotion criteria remain:
 - equal-time competitive or better
 
 Until those are met:
-- keep `triton_fused_meta` behind explicit opt-in
-- do not promote based on equal-step alone
-- do not say it replaces `reference`
-- do not say the stable backend wins equal-time universally
+- do not claim `triton_fused_meta` wins every cell
+- do not call it a universal replacement
+- do not change any default recommendation globally until one held-out
+  diffusion-like variant or shape also passes
 
-If this track resumes:
-- rerun the 2-seed qualification first
-- only then run the 5-seed qualification
-
-If it still trails on equal-time:
-- keep it experimental
-- do not change the stable recommendation
+Current recommendation scope:
+- correctness default:
+  - `triton_fused_meta_strict FULL`
+- practical default:
+  - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
+- promoted experimental candidate:
+  - `triton_fused_meta`
+  - especially when equal-time performance matters on the target
+    diffusion-like workload
 
 ## High-level summary (for new users)
 
