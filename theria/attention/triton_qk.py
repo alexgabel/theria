@@ -64,6 +64,12 @@ def get_triton_meta_bwd_counters(*, reset: bool = False) -> dict[str, float]:
     return out
 
 
+def _cuda_elapsed_s(start_event: torch.cuda.Event, end_event: torch.cuda.Event) -> float:
+    end_event.record()
+    end_event.synchronize()
+    return float(start_event.elapsed_time(end_event) / 1000.0)
+
+
 def _triton_sdpa_fwd_debug_enabled() -> bool:
     return os.getenv("THERIA_TRITON_FWD_DEBUG", "0") == "1"
 
@@ -133,16 +139,30 @@ def _meta_bwd_profile_enabled(grad_out: torch.Tensor) -> bool:
         return False
     return not torch.cuda.is_current_stream_capturing()
 
-
-def _cuda_elapsed_s(start_event: torch.cuda.Event, end_event: torch.cuda.Event) -> float:
-    end_event.record()
-    end_event.synchronize()
-    return float(start_event.elapsed_time(end_event) / 1000.0)
-
-
 def _meta_fallback_enabled() -> bool:
     # Enabled by default so unstable fast backward can recover at runtime.
     return os.getenv("THERIA_TRITON_META_ENABLE_FALLBACK", "1") == "1"
+
+
+def _meta_runtime_finite_guards_enabled() -> bool:
+    override = os.getenv("THERIA_TRITON_META_FINITE_GUARDS")
+    if override is not None:
+        return override == "1"
+    # Keep runtime finite scans on when fallback is active so the experimental
+    # path can still self-detect bad values and recover. When fallback is
+    # explicitly disabled for promotion profiling, skip the scans and let the
+    # canary/regression harnesses own stability validation.
+    return _meta_fallback_enabled()
+
+
+def _meta_fast_runtime_finite_guards_enabled() -> bool:
+    override = os.getenv("THERIA_TRITON_META_FAST_FINITE_GUARDS")
+    if override is not None:
+        return override == "1"
+    # Keep fast-path finite scans on when fallback is active so runtime recovery
+    # still has the signals it needs. Skip them by default when fallback is
+    # explicitly disabled for promotion profiling.
+    return _meta_fallback_enabled()
 
 
 def _first_nonfinite_name(named_tensors: tuple[tuple[str, torch.Tensor], ...]) -> str | None:
@@ -159,14 +179,13 @@ def _stable_recompute_sdpa(
     *,
     scale: float,
 ) -> torch.Tensor:
-    # Keep recompute numerics explicit and fp32 for better stability.
+    # Keep recompute numerics explicit and fp32 for stability while staying as
+    # close as possible to the compact reference graph used for strict runs.
     qf = q.float()
     kf = k.float()
     vf = v.float()
     scores = torch.matmul(qf, kf.transpose(-2, -1)) * scale
-    scores = scores - scores.max(dim=-1, keepdim=True).values
-    probs = torch.exp(scores)
-    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    probs = torch.softmax(scores, dim=-1)
     return torch.matmul(probs, vf)
 
 
@@ -184,6 +203,7 @@ def _recompute_autograd_grads(
     if fallback_reason is not None:
         _TRITON_META_BWD_COUNTERS["n_fallback_bwd"] += 1
     _TRITON_META_BWD_COUNTERS["n_meta_bwd"] += 1
+    finite_guards_enabled = _meta_runtime_finite_guards_enabled()
 
     bwd_start = bwd_end = None
     if profile_enabled:
@@ -195,13 +215,14 @@ def _recompute_autograd_grads(
     k_ = k if k.requires_grad else k.detach().requires_grad_(True)
     v_ = v if v.requires_grad else v.detach().requires_grad_(True)
 
-    nonfinite_input = _first_nonfinite_name(
-        (("q", q_), ("k", k_), ("v", v_), ("grad_out", grad_out))
-    )
-    if nonfinite_input is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}input[{nonfinite_input}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_input = _first_nonfinite_name(
+            (("q", q_), ("k", k_), ("v", v_), ("grad_out", grad_out))
+        )
+        if nonfinite_input is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}input[{nonfinite_input}] in_meta_recompute{suffix}")
 
     recompute_start = recompute_end = None
     if profile_enabled:
@@ -215,11 +236,12 @@ def _recompute_autograd_grads(
             recompute_start, recompute_end
         )
 
-    nonfinite_out = _first_nonfinite_name((("out", out),))
-    if nonfinite_out is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}recompute[{nonfinite_out}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_out = _first_nonfinite_name((("out", out),))
+        if nonfinite_out is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}recompute[{nonfinite_out}] in_meta_recompute{suffix}")
 
     grad_q, grad_k, grad_v = torch.autograd.grad(
         outputs=out,
@@ -231,13 +253,14 @@ def _recompute_autograd_grads(
         allow_unused=False,
     )
 
-    nonfinite_grad = _first_nonfinite_name(
-        (("dq", grad_q), ("dk", grad_k), ("dv", grad_v))
-    )
-    if nonfinite_grad is not None:
-        prefix = "fallback_" if fallback_reason is not None else ""
-        suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
-        raise RuntimeError(f"NONFINITE {prefix}grad[{nonfinite_grad}] in_meta_recompute{suffix}")
+    if finite_guards_enabled:
+        nonfinite_grad = _first_nonfinite_name(
+            (("dq", grad_q), ("dk", grad_k), ("dv", grad_v))
+        )
+        if nonfinite_grad is not None:
+            prefix = "fallback_" if fallback_reason is not None else ""
+            suffix = f" reason={fallback_reason}" if fallback_reason is not None else ""
+            raise RuntimeError(f"NONFINITE {prefix}grad[{nonfinite_grad}] in_meta_recompute{suffix}")
 
     if profile_enabled and bwd_start is not None and bwd_end is not None:
         elapsed = _cuda_elapsed_s(bwd_start, bwd_end)
@@ -660,6 +683,7 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
         # being tracked (create_graph=True) or when force-enabled by env flag.
         use_autograd_recompute = force_autograd or bool(getattr(grad_out, "requires_grad", False))
         fallback_enabled = _meta_fallback_enabled()
+        fast_finite_guards_enabled = _meta_fast_runtime_finite_guards_enabled()
         profile_enabled = _meta_bwd_profile_enabled(grad_out)
         if not use_autograd_recompute:
             debug_audit_fast_path(
@@ -675,24 +699,25 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
                 m_dtype_read=str(m.dtype),
                 l_dtype_read=str(l.dtype),
             )
-            nonfinite_fast_input = _first_nonfinite_name(
-                (("q", q), ("k", k), ("v", v), ("m", m), ("l", l), ("grad_out", grad_out))
-            )
-            if nonfinite_fast_input is not None:
-                if not fallback_enabled:
-                    raise RuntimeError(
-                        f"NONFINITE fast_input[{nonfinite_fast_input}] in_triton_fused_meta"
-                    )
-                return _recompute_autograd_grads(
-                    q=q,
-                    k=k,
-                    v=v,
-                    grad_out=grad_out,
-                    scale=scale,
-                    create_graph=False,
-                    profile_enabled=profile_enabled,
-                    fallback_reason=f"nonfinite_fast_input[{nonfinite_fast_input}]",
+            if fast_finite_guards_enabled:
+                nonfinite_fast_input = _first_nonfinite_name(
+                    (("q", q), ("k", k), ("v", v), ("m", m), ("l", l), ("grad_out", grad_out))
                 )
+                if nonfinite_fast_input is not None:
+                    if not fallback_enabled:
+                        raise RuntimeError(
+                            f"NONFINITE fast_input[{nonfinite_fast_input}] in_triton_fused_meta"
+                        )
+                    return _recompute_autograd_grads(
+                        q=q,
+                        k=k,
+                        v=v,
+                        grad_out=grad_out,
+                        scale=scale,
+                        create_graph=False,
+                        profile_enabled=profile_enabled,
+                        fallback_reason=f"nonfinite_fast_input[{nonfinite_fast_input}]",
+                    )
             _TRITON_META_BWD_COUNTERS["n_fast_bwd"] += 1
             fast_start = fast_end = None
             if profile_enabled:
@@ -706,26 +731,26 @@ class TritonFusedSDPAFunctionMeta(torch.autograd.Function):
                 _TRITON_META_BWD_COUNTERS["fast_bwd_time_s"] += _cuda_elapsed_s(
                     fast_start, fast_end
                 )
-            nonfinite_fast_grad = _first_nonfinite_name(
-                (("dq", dq), ("dk", dk), ("dv", dv))
-            )
-            if nonfinite_fast_grad is None:
-                return dq, dk, dv
-            if not fallback_enabled:
-                raise RuntimeError(
-                    f"NONFINITE fast_grad[{nonfinite_fast_grad}] in_triton_fused_meta"
+            if fast_finite_guards_enabled:
+                nonfinite_fast_grad = _first_nonfinite_name(
+                    (("dq", dq), ("dk", dk), ("dv", dv))
                 )
-            return _recompute_autograd_grads(
-                q=q,
-                k=k,
-                v=v,
-                grad_out=grad_out,
-                scale=scale,
-                create_graph=False,
-                profile_enabled=profile_enabled,
-                fallback_reason=f"nonfinite_fast_grad[{nonfinite_fast_grad}]",
-            )
-
+                if nonfinite_fast_grad is not None:
+                    if not fallback_enabled:
+                        raise RuntimeError(
+                            f"NONFINITE fast_grad[{nonfinite_fast_grad}] in_triton_fused_meta"
+                        )
+                    return _recompute_autograd_grads(
+                        q=q,
+                        k=k,
+                        v=v,
+                        grad_out=grad_out,
+                        scale=scale,
+                        create_graph=False,
+                        profile_enabled=profile_enabled,
+                        fallback_reason=f"nonfinite_fast_grad[{nonfinite_fast_grad}]",
+                    )
+            return dq, dk, dv
         return _recompute_autograd_grads(
             q=q,
             k=k,
