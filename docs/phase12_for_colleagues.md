@@ -18,7 +18,7 @@ Canonical pages:
 | --- | --- | --- | --- |
 | `triton_fused_meta_strict FULL` | Stable | Accepted stable path | Eager execution only |
 | `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2` | Practical | Accepted practical path | Eager execution only |
-| `triton_fused_meta` | Experimental candidate | Diffusion-like workloads where equal-time matters | Promoted candidate, not the default, not a universal replacement |
+| `triton_fused_meta` | Experimental candidate | Multiple validated diffusion-like shapes where equal-time matters | Promoted candidate, not the default, not a universal replacement |
 | CUDA-graph acceleration | Blocked | Not recommended | Do not use `CUDA_GRAPH_STATIC=1` in benchmark/regression commands |
 
 ## Start here
@@ -48,8 +48,8 @@ bash experiments/phase12/scripts/run_phase12_stable_demo.sh
 - Use `triton_fused_meta_strict FULL` for the stable path.
 - Use `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
   for the practical path.
-- Consider `triton_fused_meta` only as a promoted experimental candidate on the
-  target diffusion-like workload when equal-time performance matters.
+- Consider `triton_fused_meta` only as a promoted experimental candidate across
+  multiple validated diffusion-like shapes when equal-time performance matters.
 
 ### What should I not use?
 - Do not use `CUDA_GRAPH_STATIC=1` in recommended benchmark or regression runs.
@@ -57,7 +57,7 @@ bash experiments/phase12/scripts/run_phase12_stable_demo.sh
 
 ### What is experimental?
 - `triton_fused_meta` is now a promoted experimental candidate backed by 5-seed
-  qualification on the target diffusion-like workload.
+  qualification on the target workload and one held-out diffusion-like shape.
 - It is still not the default path.
 - It should not be described as a universal replacement or a win on every
   cell.
