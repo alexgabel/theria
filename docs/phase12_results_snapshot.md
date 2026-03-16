@@ -15,7 +15,7 @@ Canonical pages:
 | --- | --- | --- | --- |
 | `triton_fused_meta_strict FULL` | Stable | Accepted stable path | Eager execution only |
 | `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2` | Practical | Accepted practical path | Eager execution only |
-| `triton_fused_meta` | Experimental candidate | Multiple validated diffusion-like shapes where equal-time matters | Promoted candidate, not the default, not a universal replacement |
+| `triton_fused_meta` | Experimental candidate | Several validated diffusion-like shapes where equal-time matters | Promoted candidate, not the default, not a universal replacement |
 | CUDA-graph acceleration | Blocked | Not part of the accepted workflow | Do not use `CUDA_GRAPH_STATIC=1` in benchmark/regression commands |
 
 Validation references:
@@ -23,6 +23,8 @@ Validation references:
   - `phase12_requalify_diffproxy_s5_20260313_175213`
 - held-out shape:
   - `phase12_heldout_diffproxy_s5_20260315_182507`
+- larger held-out shape (`256 x 16`):
+  - `phase12_heldout_diffproxy_256x16_s5_20260316_105752`
 
 Key cautions:
 - No claim that `triton_fused_meta` replaces `reference` universally.
