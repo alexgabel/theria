@@ -22,8 +22,9 @@ Current branch outcome:
 - conservative defaults unchanged:
   - `triton_fused_meta_strict FULL`
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
-- `triton_fused_meta` is now a promoted experimental candidate for the target
-  diffusion-like workload, especially when equal-time performance matters
+- `triton_fused_meta` is now a promoted experimental candidate across multiple
+  validated diffusion-like shapes, especially when equal-time performance
+  matters
 - this is not a claim of universal replacement or a win on every cell
 
 Current bounded optimization batch:
@@ -135,6 +136,43 @@ Promotion requalification outcome after the final bounded batch:
   - `FULL k=2` still trails `triton_fused_meta_strict`
   - run one held-out diffusion-like variant or shape before changing any
     default recommendation globally
+
+Held-out diffusion-like validation outcome:
+- 2-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_heldout_diffproxy_s2_20260315_133453`
+  - frontier tag: `phase12_heldout_diffproxy_s2_20260315_133453`
+- 5-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_heldout_diffproxy_s5_20260315_182507`
+  - frontier tag: `phase12_heldout_diffproxy_s5_20260315_182507`
+- outcome:
+  - fallback-free
+  - stable across 5 seeds
+  - exact equal-step parity
+  - equal-time competitive or better across multiple validated
+    diffusion-like shapes
+- branch decision:
+  - keep the conservative defaults unchanged
+  - broaden wording from "target diffusion-like workload" to
+    "multiple validated diffusion-like shapes"
+
+Larger held-out diffusion-like validation outcome (`256 x 16`):
+- 2-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_heldout_diffproxy_256x16_s2_20260316_001656`
+  - frontier tag: `phase12_heldout_diffproxy_256x16_s2_20260316_001656`
+- 5-seed qualification:
+  - gate tag: `phase12_meta_gate_phase12_heldout_diffproxy_256x16_s5_20260316_105752`
+  - frontier tag: `phase12_heldout_diffproxy_256x16_s5_20260316_105752`
+- outcome:
+  - fallback-free
+  - stable across 5 seeds
+  - exact equal-step parity
+  - equal-time competitive or better in 8/9 cells at the larger held-out shape
+- branch decision:
+  - keep the conservative defaults unchanged
+  - broaden wording from "multiple validated diffusion-like shapes" to
+    "several validated diffusion-like shapes"
+- caveat:
+  - `FULL k=2` remains the weakest cell at larger shapes
 
 Current bounded optimization batch:
 - hypothesis: per-call CUDA event synchronization in the experimental-path

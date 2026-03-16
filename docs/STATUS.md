@@ -11,8 +11,8 @@ status is reported with named tracks:
 
 - **A. Stable Delivery** — accepted on eager execution
 - **B. CUDA-Graph R&D** — blocked, isolated from benchmark/regression workflows
-- **C. Experimental Backend Promotion** — promotion candidate on the target
-  diffusion-like workload, not the default path
+- **C. Experimental Backend Promotion** — promotion candidate across multiple
+  validated diffusion-like shapes, not the default path
 
 ## Current product baselines
 
@@ -120,7 +120,7 @@ Current decision:
   - `triton_fused_meta_strict FULL`
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
 - Treat `triton_fused_meta` as a promoted experimental candidate for the
-  target diffusion-like workload, especially when equal-time performance
+  several validated diffusion-like shapes, especially when equal-time performance
   matters.
 
 Latest successful promotion references:
@@ -129,11 +129,22 @@ Latest successful promotion references:
 - 5-seed:
   - `phase12_requalify_diffproxy_s5_20260313_175213`
 
+Held-out diffusion-like validation references:
+- 2-seed:
+  - `phase12_heldout_diffproxy_s2_20260315_133453`
+- 5-seed:
+  - `phase12_heldout_diffproxy_s5_20260315_182507`
+- 2-seed (`256 x 16`):
+  - `phase12_heldout_diffproxy_256x16_s2_20260316_001656`
+- 5-seed (`256 x 16`):
+  - `phase12_heldout_diffproxy_256x16_s5_20260316_105752`
+
 Why promotion is active:
 - fallback-free
 - stable across 5 seeds
 - contract/equal-step parity preserved
-- equal-time competitive or better on the target diffusion-like workload
+- equal-time competitive or better across several validated
+  diffusion-like shapes
 
 Promotion criteria remain:
 - fallback-free
@@ -144,8 +155,8 @@ Promotion criteria remain:
 Until those are met:
 - do not claim `triton_fused_meta` wins every cell
 - do not call it a universal replacement
-- do not change any default recommendation globally until one held-out
-  diffusion-like variant or shape also passes
+- do not change any default recommendation globally until broader
+  recommendation policy is explicitly approved
 
 Current recommendation scope:
 - correctness default:
@@ -154,8 +165,8 @@ Current recommendation scope:
   - `triton_fused_meta_strict FULL_HYBRID --meta-every-n-outer 8 --meta-last-n-inner 2`
 - promoted experimental candidate:
   - `triton_fused_meta`
-  - especially when equal-time performance matters on the target
-    diffusion-like workload
+  - especially when equal-time performance matters on several validated
+    diffusion-like shapes
 
 ## High-level summary (for new users)
 
