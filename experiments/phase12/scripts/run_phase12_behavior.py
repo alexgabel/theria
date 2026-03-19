@@ -9,6 +9,7 @@ Patch P3 focus:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ from theria.attention.triton_sdpa_backward import (
 )
 from theria.maml.loops import meta_loss_on_tasks, meta_loss_on_tasks_full_frozen
 from theria.maml.loops import get_maml_profile_counters, reset_maml_profile_counters
-from theria.tasks.synthetic_seqcls import TaskBatch, task_sampler
+from theria.tasks.synthetic_seqcls import DatasetSplit, TaskBatch, task_sampler
 from experiments.phase11.scripts.run_bad_backend_diagnostics import _attention_second_order_ok
 
 
@@ -46,6 +47,7 @@ Mode = Literal["FULL", "FO", "FO_STRICT", "FULL_FROZEN", "FULL_HYBRID"]
 EXPERIMENTAL_BACKENDS = {"triton_fused_meta"}
 CUDA_GRAPH_STATIC_BACKEND = "triton_fused_meta_strict"
 CUDA_GRAPH_WARMUP_STEPS = 2
+EVAL_SPLIT_NUM_META_BATCHES = 4
 
 
 def _mean_last(values: list[float], n: int) -> float:
@@ -102,6 +104,104 @@ def _task_batch_to_device(task: TaskBatch, device: torch.device) -> TaskBatch:
         x_q=task.x_q.to(device=device, non_blocking=False),
         y_q=task.y_q.to(device=device, non_blocking=False),
     )
+
+
+@contextlib.contextmanager
+def _preserve_rng_state(device: torch.device):
+    cpu_state = torch.random.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if device.type == "cuda" else None
+    try:
+        yield
+    finally:
+        torch.random.set_rng_state(cpu_state)
+        if device.type == "cuda" and cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
+
+
+def _sample_tasks_for_split(
+    *,
+    split: DatasetSplit,
+    n_tasks: int,
+    seq_len: int,
+    d_model: int,
+    num_signal_positions: int,
+    sampler_device: torch.device,
+    device: torch.device,
+    dataset_seed: int,
+    episode_seed: int | None = None,
+) -> list[TaskBatch]:
+    with _preserve_rng_state(device):
+        if episode_seed is not None:
+            torch.manual_seed(episode_seed)
+            if device.type == "cuda":
+                torch.cuda.manual_seed_all(episode_seed)
+        sampled_tasks = [
+            task_sampler(
+                T=seq_len,
+                D=d_model,
+                num_signal_positions=num_signal_positions,
+                device=sampler_device,
+                split=split,
+                dataset_seed=dataset_seed,
+            )
+            for _ in range(n_tasks)
+        ]
+    if sampler_device != device:
+        return [_task_batch_to_device(task, device) for task in sampled_tasks]
+    return sampled_tasks
+
+
+def _evaluate_meta_split(
+    *,
+    model: torch.nn.Module,
+    split: DatasetSplit,
+    n_meta_batches: int,
+    meta_batch_size: int,
+    inner_lr: float,
+    inner_steps: int,
+    seq_len: int,
+    num_signal_positions: int,
+    sampler_device: torch.device,
+    device: torch.device,
+    dataset_seed: int,
+    fail_on_nonfinite: bool,
+    autocast_enabled: bool,
+    cast_dtype: torch.dtype,
+) -> tuple[float, float]:
+    losses: list[float] = []
+    accs: list[float] = []
+    for batch_idx in range(n_meta_batches):
+        tasks = _sample_tasks_for_split(
+            split=split,
+            n_tasks=meta_batch_size,
+            seq_len=seq_len,
+            d_model=model.cfg.d_model,
+            num_signal_positions=num_signal_positions,
+            sampler_device=sampler_device,
+            device=device,
+            dataset_seed=dataset_seed,
+            episode_seed=dataset_seed + 10_000 * (1 + batch_idx) + (100 if split == "val" else 200),
+        )
+        with torch.autocast(
+            device_type=device.type,
+            enabled=autocast_enabled,
+            dtype=cast_dtype,
+        ):
+            outer_loss, metrics = meta_loss_on_tasks(
+                model=model,
+                tasks=tasks,
+                inner_lr=inner_lr,
+                inner_steps=inner_steps,
+                fo=True,
+                fo_strict=False,
+                meta_last_n_inner=0,
+                check_finite=fail_on_nonfinite,
+                finite_prefix=f"eval_split={split}",
+                return_metrics=True,
+            )
+        losses.append(float(outer_loss.item()))
+        accs.append(float(metrics["post_adapt_acc"]))
+    return float(sum(losses) / len(losses)), float(sum(accs) / len(accs))
 
 
 def _snapshot_model_state(
@@ -406,19 +506,15 @@ def run_behavior(
     hybrid_fo_optimizer_step_time_s = 0.0
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     for step_idx in range(outer_steps):
-        sampled_tasks = [
-            task_sampler(
-                T=seq_len,
-                D=model.cfg.d_model,
-                num_signal_positions=num_signal_positions,
-                device=sampler_device,
-            )
-            for _ in range(meta_batch_size)
-        ]
-        tasks = (
-            [_task_batch_to_device(task, device) for task in sampled_tasks]
-            if sampler_device != device
-            else sampled_tasks
+        tasks = _sample_tasks_for_split(
+            split="train",
+            n_tasks=meta_batch_size,
+            seq_len=seq_len,
+            d_model=model.cfg.d_model,
+            num_signal_positions=num_signal_positions,
+            sampler_device=sampler_device,
+            device=device,
+            dataset_seed=seed,
         )
         if not cuda_graph_supported:
             optimizer.zero_grad(set_to_none=True)
@@ -602,6 +698,42 @@ def run_behavior(
     sdpa_debug_counts = get_triton_sdpa_debug_counters(reset=True)
     maml_profile_counts = get_maml_profile_counters(reset=True)
 
+    val_loss, val_acc = _evaluate_meta_split(
+        model=model,
+        split="val",
+        n_meta_batches=EVAL_SPLIT_NUM_META_BATCHES,
+        meta_batch_size=meta_batch_size,
+        inner_lr=inner_lr,
+        inner_steps=inner_steps,
+        seq_len=seq_len,
+        num_signal_positions=num_signal_positions,
+        sampler_device=sampler_device,
+        device=device,
+        dataset_seed=seed,
+        fail_on_nonfinite=fail_on_nonfinite,
+        autocast_enabled=autocast_enabled,
+        cast_dtype=cast_dtype,
+    )
+    test_loss, test_acc = _evaluate_meta_split(
+        model=model,
+        split="test",
+        n_meta_batches=EVAL_SPLIT_NUM_META_BATCHES,
+        meta_batch_size=meta_batch_size,
+        inner_lr=inner_lr,
+        inner_steps=inner_steps,
+        seq_len=seq_len,
+        num_signal_positions=num_signal_positions,
+        sampler_device=sampler_device,
+        device=device,
+        dataset_seed=seed,
+        fail_on_nonfinite=fail_on_nonfinite,
+        autocast_enabled=autocast_enabled,
+        cast_dtype=cast_dtype,
+    )
+    reset_triton_meta_bwd_counters()
+    reset_triton_sdpa_debug_counters()
+    reset_maml_profile_counters()
+
     # Sparse rel_diff probe (once per run): FULL vs FO on one fresh task
     rel_diff_probe_val = float("nan")
     if rel_diff_probe:
@@ -615,6 +747,8 @@ def run_behavior(
                 D=model.cfg.d_model,
                 num_signal_positions=num_signal_positions,
                 device=sampler_device,
+                split="val",
+                dataset_seed=seed,
             )
             if sampler_device != device:
                 probe_task = _task_batch_to_device(probe_task, device)
@@ -678,6 +812,10 @@ def run_behavior(
         "n_hybrid_fo_steps": int(n_hybrid_fo_steps),
         "final_loss": final_loss,
         "final_acc": final_acc,
+        "val_loss": val_loss,
+        "val_acc": val_acc,
+        "test_loss": test_loss,
+        "test_acc": test_acc,
         "attn_grad_norm_q": attn_grad_norm_q,
         "attn_grad_norm_k": attn_grad_norm_k,
         "attn_grad_norm_v": attn_grad_norm_v,
@@ -941,6 +1079,10 @@ def main() -> None:
             "n_hybrid_fo_steps": 0,
             "final_loss": float("nan"),
             "final_acc": float("nan"),
+            "val_loss": float("nan"),
+            "val_acc": float("nan"),
+            "test_loss": float("nan"),
+            "test_acc": float("nan"),
             "attn_grad_present": "False",
             "attn_grad_norm_q": float("nan"),
             "attn_grad_norm_k": float("nan"),
@@ -1037,6 +1179,8 @@ def main() -> None:
     print(
         f"backend={row['backend']} mode={row['mode']} seed={row['seed']} "
         f"final_loss={row['final_loss']} final_acc={row['final_acc']} "
+        f"val_loss={row.get('val_loss','NA')} val_acc={row.get('val_acc','NA')} "
+        f"test_loss={row.get('test_loss','NA')} test_acc={row.get('test_acc','NA')} "
         f"attn_grad_norm_q={row['attn_grad_norm_q']} "
         f"attn_grad_norm_k={row['attn_grad_norm_k']} "
         f"attn_grad_norm_v={row['attn_grad_norm_v']} "
@@ -1087,6 +1231,10 @@ def main() -> None:
                     "n_hybrid_fo_steps",
                     "final_loss",
                     "final_acc",
+                    "val_loss",
+                    "val_acc",
+                    "test_loss",
+                    "test_acc",
                     "attn_grad_present",
                     "attn_grad_norm_q",
                     "attn_grad_norm_k",
